@@ -1,73 +1,59 @@
 # Agent Skills
 
-Agent Skills give Claude, Codex, Pi and OpenCode operational knowledge without
-turning that knowledge into a Claude-only plugin or duplicating it for every
-harness.
+A skill is a folder of know-how your coding agent can read — Claude,
+Codex, Pi, or OpenCode. Add the official set with:
 
-## One canonical copy
-
-On each account Devmachine installs the complete skill directories under:
-
-```text
-~/.agents/skills/<skill>/
+```
+devmachine skills add
 ```
 
-Codex, Pi and OpenCode consume that shared location. Claude receives a relative
-compatibility link:
+## One shared copy
+
+Devmachine installs skills once, under `~/.agents/skills/<skill>/`.
+Codex, Pi, and OpenCode read that folder directly. Claude gets a link
+that points to it, so nothing is duplicated:
 
 ```text
 ~/.claude/skills/<skill> -> ../../.agents/skills/<skill>
 ```
 
-Scripts, references and assets travel with `SKILL.md`. Ownership records let
-Devmachine update its own paths while refusing to overwrite an unmanaged skill
-or one owned by another package.
-
 ## Skills on your computer
 
 ```bash
-devmachine skills add
+devmachine skills add                        # the official set
 devmachine skills add --package global-skills
 devmachine skills list
 devmachine skills update
 devmachine skills remove <skill>
 ```
 
-Bare `add` installs the official `devmachine-skills` package from the package
-release pinned by the effective configuration. It works before `devmachine
-setup` too: with no configuration yet, it takes the latest published packages
-release instead of a pin. `--package` selects an operator-owned local package.
-These commands only read and write your computer; they never connect to a
-configured machine.
+`--package` installs skills from one of your own packages instead. None
+of these commands touch a machine.
 
 ## Skills in a workspace
 
-A workspace receives a contribution only by selecting its package:
+A workspace gets skills only when you add the package to it, and run
+`sync`:
 
 ```bash
 devmachine packages add devmachine-skills --workspace alice
-devmachine sync --check --tags devmachine-skills
 devmachine sync --tags devmachine-skills
 ```
 
-The configuration edit is local. Both `sync` commands contact the selected
-machine; obtain approval before running either against a real target.
+The Claude link is added only for a workspace that also has
+`claude-code`. Removing the package from your configuration doesn't
+delete files already on the machine.
 
-`sync` installs the canonical tree only in workspaces selecting the package. A
-Claude link is added only when that workspace also selects `claude-code`.
-Removing a package from `config.yml` is additive and does not erase remote
-files.
+## Adding skills from your own package
 
-## Contributing skills from a package
-
-An ordinary workspace package may add:
+A package can add:
 
 ```yaml
 skills:
   path: skills
 ```
 
-Every direct child of that directory is a complete skill containing a valid
-`SKILL.md`. The path must stay inside the package. The role may still contain
-tasks, defaults, files and every other normal Ansible role component; the CLI
-generates only the repetitive canonical-copy and harness-adapter work.
+Every folder directly inside `skills/` must be a complete skill, with
+its own `SKILL.md`. See
+[the package format](https://adevmachine.github.io/docs/reference/package-format/) for the rest of
+what a package can declare.
