@@ -14,6 +14,8 @@ plugins/devmachine-dev/skills/eoq-live/scripts/collect.py — kept as a
 self-contained copy here because that plugin's install path changes with
 version and this script must not depend on it.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import os
