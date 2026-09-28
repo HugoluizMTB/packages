@@ -30,7 +30,7 @@ without ever making it public.
 
 In `config.yml`, on the workspace, under `routes:`. `sync` is what
 actually writes it to the machine. See
-[why a published site lives in the configuration](https://adevmachine.github.io/docs/how-it-works/published-sites/).
+[why a published site lives in the configuration](https://mydevmachine.github.io/docs/how-it-works/published-sites/).
 
 ## Why `expose` asks first
 

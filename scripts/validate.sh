@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if ! command -v devmachine >/dev/null 2>&1; then
-  echo "devmachine is not on PATH. Install it with: brew install adevmachine/tap/devmachine" >&2
+  echo "devmachine is not on PATH. Install it with: brew install mydevmachine/tap/devmachine" >&2
   exit 1
 fi
 

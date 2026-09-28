@@ -25,7 +25,7 @@ machines:
 This is different from `machines create-local`, which makes a small
 virtual machine that lives on your computer but is reached like a normal
 remote server, with its own address and key. See
-[Your computer as a machine](https://adevmachine.github.io/docs/how-it-works/your-computer-as-a-machine/)
+[Your computer as a machine](https://mydevmachine.github.io/docs/how-it-works/your-computer-as-a-machine/)
 for when to use which.
 
 A workspace can't run on a self machine — a workspace is an account

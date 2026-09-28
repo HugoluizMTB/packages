@@ -52,8 +52,8 @@ binary, the binary wins: prefer `devmachine <command> --help` and `devmachine
 packages schema` for the running binary's own truth.
 
 For anything the local references do not answer, read
-https://adevmachine.github.io/docs/llms-full.txt (every documentation page in
-one file) or the page on https://adevmachine.github.io/docs/.
+https://mydevmachine.github.io/docs/llms-full.txt (every documentation page in
+one file) or the page on https://mydevmachine.github.io/docs/.
 
 ## Safety boundary
 

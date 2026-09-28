@@ -1,6 +1,6 @@
 # packages
 
-The recipes the [devmachine CLI](https://github.com/adevmachine/cli) applies to a
+The recipes the [devmachine CLI](https://github.com/mydevmachine/devmachine) applies to a
 machine. Nothing here is built into the binary: the CLI fetches a release of this
 repository, checks it against the checksum published beside it, and runs what it
 finds.

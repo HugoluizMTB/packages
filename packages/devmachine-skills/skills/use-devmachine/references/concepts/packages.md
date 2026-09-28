@@ -5,7 +5,7 @@ Docker, your GitHub login.
 
 Add one with `devmachine packages add <name>`, then run `devmachine sync`
 to install it. `devmachine packages list` shows what exists. The
-published packages live at `github.com/adevmachine/packages`, and you can
+published packages live at `github.com/mydevmachine/packages`, and you can
 write your own.
 
 ## Which packages exist
@@ -52,7 +52,7 @@ format as the published ones, and a package there with the same name
 replaces an official one.
 
 A package is an Ansible role plus a `package.yml` file — see
-[the package format](https://adevmachine.github.io/docs/reference/package-format/) for what goes in
+[the package format](https://mydevmachine.github.io/docs/reference/package-format/) for what goes in
 it, and
-[why packages work this way](https://adevmachine.github.io/docs/how-it-works/why-nothing-is-embedded/)
+[why packages work this way](https://mydevmachine.github.io/docs/how-it-works/why-nothing-is-embedded/)
 for the reasoning behind it.

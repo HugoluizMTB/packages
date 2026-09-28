@@ -109,7 +109,7 @@ package called `tunnel` that declares `port` uses
 has one shared namespace, and two packages might both want a `port`.
 
 That is the same name used for a target's
-[settings](https://adevmachine.github.io/docs/concepts/configuration/#settings): a setting is just a
+[settings](https://mydevmachine.github.io/docs/concepts/configuration/#settings): a setting is just a
 default someone overrode, and the package does not know or care where
 the value came from.
 
@@ -155,7 +155,7 @@ Only `manual` can be `shareable`. A `secret` or `file` is delivered
 fresh to each place that needs it, never copied, so `shareable` on
 either is refused. `scope` here is only a recommendation — whether a
 shareable credential is actually shared is the operator's own choice,
-per workspace — see [Configuration](https://adevmachine.github.io/docs/concepts/configuration/).
+per workspace — see [Configuration](https://mydevmachine.github.io/docs/concepts/configuration/).
 
 ### `requires_files`
 
