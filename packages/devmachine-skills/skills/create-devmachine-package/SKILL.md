@@ -50,6 +50,10 @@ These are copies of the CLI's own docs, kept in sync by
 binary, the binary wins: prefer `devmachine packages schema` and `devmachine
 <command> --help` for the running binary's own truth.
 
+For anything the local references do not answer, read
+https://adevmachine.github.io/docs/llms-full.txt (every documentation page in
+one file) or the page on https://adevmachine.github.io/docs/.
+
 ## Prove it on a fake target
 
 Add the package with `devmachine packages add` or `devmachine workspaces edit`.
