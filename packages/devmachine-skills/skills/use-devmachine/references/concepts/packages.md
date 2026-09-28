@@ -52,7 +52,7 @@ format as the published ones, and a package there with the same name
 replaces an official one.
 
 A package is an Ansible role plus a `package.yml` file — see
-[the package format](https://mydevmachine.github.io/docs/reference/package-format/) for what goes in
+[the package format](https://mydevmachine.sh/reference/package-format/) for what goes in
 it, and
-[why packages work this way](https://mydevmachine.github.io/docs/how-it-works/why-nothing-is-embedded/)
+[why packages work this way](https://mydevmachine.sh/how-it-works/why-nothing-is-embedded/)
 for the reasoning behind it.

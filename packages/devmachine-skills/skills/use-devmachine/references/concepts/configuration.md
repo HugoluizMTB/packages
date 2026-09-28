@@ -122,7 +122,7 @@ workspaces:
 `machine` means one login, copied into every workspace that wants it.
 `own` means that workspace signs in for itself. See
 [Credentials](credentials.md) for how each kind works, and
-[Sharing a login](https://mydevmachine.github.io/docs/how-it-works/sharing-a-login/) for what the copy
+[Sharing a login](https://mydevmachine.sh/how-it-works/sharing-a-login/) for what the copy
 does.
 
 ## What is validated

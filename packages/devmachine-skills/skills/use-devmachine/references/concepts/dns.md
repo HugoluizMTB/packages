@@ -40,7 +40,7 @@ Talking to your domain provider — Hostinger, Cloudflare, or another — is
 a package, installed with `devmachine packages add` like any other. Until
 one is installed, `dns add` can't write anywhere, and prints the record
 for you to create by hand instead. See
-[DNS providers](https://mydevmachine.github.io/docs/how-it-works/dns-providers/) for what each one does.
+[DNS providers](https://mydevmachine.sh/how-it-works/dns-providers/) for what each one does.
 
 ## Choosing a zone and a provider
 

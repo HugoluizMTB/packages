@@ -55,5 +55,5 @@ skills:
 
 Every folder directly inside `skills/` must be a complete skill, with
 its own `SKILL.md`. See
-[the package format](https://mydevmachine.github.io/docs/reference/package-format/) for the rest of
+[the package format](https://mydevmachine.sh/reference/package-format/) for the rest of
 what a package can declare.

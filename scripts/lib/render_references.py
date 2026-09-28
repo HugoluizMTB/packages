@@ -9,7 +9,7 @@ import re
 import sys
 from pathlib import Path
 
-BASE_URL = "https://mydevmachine.github.io/docs"
+BASE_URL = "https://mydevmachine.sh"
 
 # Each skill lists the docs it needs, as (docs-relative source path,
 # references-relative destination path). Order matters only for readability;

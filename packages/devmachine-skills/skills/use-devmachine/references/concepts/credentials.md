@@ -16,7 +16,7 @@ devmachine credentials list
 | **file** | a VPN profile, a kubeconfig | no, the CLI stores it |
 
 A manual login can't be done for you. See
-[why a login can't be automated](https://mydevmachine.github.io/docs/how-it-works/why-a-login-cannot-be-automated/).
+[why a login can't be automated](https://mydevmachine.sh/how-it-works/why-a-login-cannot-be-automated/).
 
 ## The commands
 
@@ -53,7 +53,7 @@ workspaces:
       gh: own          # bob signs in for himself
 ```
 
-See [sharing a login](https://mydevmachine.github.io/docs/how-it-works/sharing-a-login/) for what
+See [sharing a login](https://mydevmachine.sh/how-it-works/sharing-a-login/) for what
 sharing actually copies.
 
 ## Where a credential lands

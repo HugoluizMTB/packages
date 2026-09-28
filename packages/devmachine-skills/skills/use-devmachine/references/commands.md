@@ -33,7 +33,7 @@ for the password (never shown on screen); install the key; open a **new
 connection using only the key** to prove it works; turn password login
 off; install Ansible. If the proof step fails, nothing is locked down and
 the error says where to look. See [setting up a server for the first
-time](https://mydevmachine.github.io/docs/how-it-works/trust-bootstrap/) for why the order matters.
+time](https://mydevmachine.sh/how-it-works/trust-bootstrap/) for why the order matters.
 
 Works on **Debian and Ubuntu** only; elsewhere it names your distro and
 stops. The password is used once and written nowhere.
@@ -59,7 +59,7 @@ devmachine setup git [--yes] [--check]
 Turns your configuration directory into a git repository, so you can push
 it to a private remote. `config.yml`, `packages.lock` and `known_hosts`
 are committed — see [versioning your
-configuration](https://mydevmachine.github.io/docs/how-it-works/versioning-your-configuration/) for what
+configuration](https://mydevmachine.sh/how-it-works/versioning-your-configuration/) for what
 never is.
 
 In order: writes `.gitignore` **before** `git init`, so a key can never
@@ -128,7 +128,7 @@ configured.
 `add` sets up another server, same as [setup](#setup). `add --self
 <name>` instead names the computer devmachine runs on: no address, port
 or key. Refuses if a self machine already exists, or the name is taken.
-See [your computer as a machine](https://mydevmachine.github.io/docs/how-it-works/your-computer-as-a-machine/)
+See [your computer as a machine](https://mydevmachine.sh/how-it-works/your-computer-as-a-machine/)
 for how this differs from `machines create-local`.
 
 A self machine has no `hosts`, `user`, `port` or `key`, and no workspace
@@ -323,7 +323,7 @@ devmachine dns rm  <name> <type> [value] [--dns-provider p] [--zone z] [--check]
 ```
 
 Manages DNS records through an installed provider package (Hostinger,
-Cloudflare). See [DNS providers](https://mydevmachine.github.io/docs/how-it-works/dns-providers/) for
+Cloudflare). See [DNS providers](https://mydevmachine.sh/how-it-works/dns-providers/) for
 what differs between them.
 
 `status` checks a name from the outside — resolves, certificate accepted,
@@ -367,7 +367,7 @@ confirmation first — the port becomes reachable by anyone who learns the
 hostname; see [tunnel](#tunnel) for what should not get a yes.
 `--publish` is the non-interactive way past that; `--check` previews. It
 also points the hostname at the machine, same as `dns add`. See [why a
-published site lives in the configuration](https://mydevmachine.github.io/docs/how-it-works/published-sites/).
+published site lives in the configuration](https://mydevmachine.sh/how-it-works/published-sites/).
 
 `list` prints every host with its port, workspace, and one of four
 words: `published` (both agree), `pending`/`differs` (needs `sync`),
@@ -456,7 +456,7 @@ is refused — use `devmachine secrets set`, then `devmachine credentials
 push`.
 
 Same strict fingerprint check as every other command. See [SSH host
-keys](https://mydevmachine.github.io/docs/how-it-works/ssh-host-keys/).
+keys](https://mydevmachine.sh/how-it-works/ssh-host-keys/).
 
 ## credentials
 
@@ -489,7 +489,7 @@ devmachine packages pin [release]
 ```
 
 Manages what is installed on your machines and workspaces. See [the
-package format](https://mydevmachine.github.io/docs/reference/package-format/).
+package format](https://mydevmachine.sh/reference/package-format/).
 
 `list` shows each package once with every machine and workspace that
 uses it; one nothing provides is listed as `missing`.

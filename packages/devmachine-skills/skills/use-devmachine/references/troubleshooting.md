@@ -18,7 +18,7 @@ lists every address it tried and what happened for each.
 - Check the port. A server on a non-standard port needs `port:` set in its
   configuration.
 - Check for a second address — see
-  [Addresses and fallback](https://mydevmachine.github.io/docs/how-it-works/addresses-and-fallback/).
+  [Addresses and fallback](https://mydevmachine.sh/how-it-works/addresses-and-fallback/).
 
 ## "answered on … but refused the login"
 
@@ -49,7 +49,7 @@ anything else on your computer, does not. Setting `key:` on the server makes
 devmachine immune to whatever your agent is holding.
 
 **What to do:** Set `key:` on the server. Full explanation:
-[SSH and authentication](https://mydevmachine.github.io/docs/how-it-works/ssh-and-authentication/).
+[SSH and authentication](https://mydevmachine.sh/how-it-works/ssh-and-authentication/).
 
 ## "ansible-playbook is not on the machine"
 
@@ -167,7 +167,7 @@ Two more lines that are not errors, but change what a command does:
 - **"the provider failed"**, with something that looks like a crash — this is
   a bug in the provider package, not in devmachine itself. The package sent
   back something that does not match the [DNS provider
-  contract](https://mydevmachine.github.io/docs/reference/dns-provider-contract/).
+  contract](https://mydevmachine.sh/reference/dns-provider-contract/).
 
 ## A certificate never arrives after `expose add`
 
@@ -263,7 +263,7 @@ names it.
 ## A file a removed package left behind is still on the machine
 
 **What it means:** `sync` only removes a file it remembers writing — see
-[What sync removes](https://mydevmachine.github.io/docs/how-it-works/what-sync-removes/). If a package was
+[What sync removes](https://mydevmachine.sh/how-it-works/what-sync-removes/). If a package was
 removed from your configuration before you upgraded to the version that
 started tracking this, `sync` never recorded that file, so it never cleans it
 up.
@@ -429,7 +429,7 @@ repository is ever made public, can still find it.
 
 `devmachine setup git` refuses to run against a directory that already
 tracks one of these paths, and says so — see
-[versioning your configuration](https://mydevmachine.github.io/docs/how-it-works/versioning-your-configuration/).
+[versioning your configuration](https://mydevmachine.sh/how-it-works/versioning-your-configuration/).
 
 ## `expose add` said "recorded", and the site does not answer
 

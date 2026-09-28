@@ -43,7 +43,7 @@ devmachine workspaces edit alice --set caddy.email=you@example.com
 
 An empty value, `--set caddy.email=`, removes the override. On a machine,
 edit `settings:` directly in `config.yml` — see
-[Configuration](https://mydevmachine.github.io/docs/concepts/configuration/#settings).
+[Configuration](https://mydevmachine.sh/concepts/configuration/#settings).
 
 ## Writing your own
 
@@ -54,5 +54,5 @@ replaces an official one.
 A package is an Ansible role plus a `package.yml` file — see
 [the package format](../package-format.md) for what goes in
 it, and
-[why packages work this way](https://mydevmachine.github.io/docs/how-it-works/why-nothing-is-embedded/)
+[why packages work this way](https://mydevmachine.sh/how-it-works/why-nothing-is-embedded/)
 for the reasoning behind it.
