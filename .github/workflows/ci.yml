@@ -91,7 +91,7 @@ jobs:
       - name: Check the skill references are in sync
         run: |
           set -e
-          ./packages/devmachine-skills/scripts/sync-skill-references.sh \
+          ./scripts/sync-skill-references.sh \
             /tmp/cli-docs/docs --check || {
             echo "::error::skill references are out of date. Run" \
               "'scripts/sync-skill-references.sh <cli-docs-checkout>' and commit the result."

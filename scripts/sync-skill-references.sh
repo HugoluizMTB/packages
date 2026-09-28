@@ -43,7 +43,7 @@ done
 [[ -d "$DOCS_DIR" ]] || { echo "error: not a directory: $DOCS_DIR" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SKILLS_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SKILLS_ROOT="$(cd "$SCRIPT_DIR/../packages/devmachine-skills" && pwd)"
 DOCS_DIR="$(cd "$DOCS_DIR" && pwd)"
 
 WORK_DIR="$(mktemp -d)"
