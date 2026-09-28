@@ -34,6 +34,7 @@ never seen.
 | `ssh_hardening` | machine | Password authentication off, for good. |
 | `mac-brew` | machine | Installs Homebrew taps, formulae and casks from lists. |
 | `mac-mise` | machine | Installs mise's global tools from a list. |
+| `devmachine-app` | machine | What the Devmachine macOS app asks a machine for. |
 | `devmachine-skills` | workspace | Teaches supported agents to operate Devmachine and create packages. |
 
 ## A pin is a tag, never a branch

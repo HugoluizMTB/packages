@@ -1,0 +1,18 @@
+format: 1
+name: devmachine-app
+scope: machine
+summary: What the Devmachine macOS app asks a machine for, reached through `devmachine run --package devmachine-app`.
+
+requires:
+  cli: ">= 0.7.1"
+
+variables:
+  github_hosts:
+    summary: >-
+      GitHub Enterprise hosts the context panel resolves pull requests on,
+      each as `{host, proxy}` with `proxy` optional. github.com always works;
+      this adds more.
+    default: []
+
+entrypoint: bin/devmachine-app
+commands: [context]

@@ -1,0 +1,777 @@
+#!/usr/bin/env python3
+"""devmachine-infer: Claude Code session transcript -> context-panel JSON.
+
+Usage:
+    devmachine-infer --session <tmux-session> [--project DIR] [--no-resolve]
+
+Deterministic and LLM-free. Resolves the tmux session's cwd, finds its Claude
+transcript, extracts PR/Linear/plan/todo references, optionally resolves live
+GitHub state via `gh`, and prints one JSON document (the context-panel schema).
+
+Vendored (verbatim, adapted only in return shape where noted) from the
+eoq-live engine at
+plugins/devmachine-dev/skills/eoq-live/scripts/collect.py — kept as a
+self-contained copy here because that plugin's install path changes with
+version and this script must not depend on it.
+"""
+import argparse
+import json
+import os
+import platform
+import re
+import subprocess
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+PROJECTS_DIR = Path.home() / ".claude" / "projects"
+
+CONFIG_PATH_LINUX = Path("/etc/devmachine-app/config.json")
+CONFIG_PATH_MACOS = Path.home() / ".config" / "devmachine-app" / "config.json"
+
+
+def config_path() -> Path:
+    override = os.environ.get("DEVMACHINE_APP_CONFIG")
+    if override:
+        return Path(override)
+    return CONFIG_PATH_MACOS if platform.system() == "Darwin" else CONFIG_PATH_LINUX
+
+
+def load_config() -> dict:
+    try:
+        return json.loads(config_path().read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def github_hosts() -> list[dict]:
+    """The GitHub Enterprise hosts a PR reference may name, beyond github.com.
+
+    Each entry is `{"host": ..., "proxy": ...}`; `proxy` may be empty. Missing
+    or empty configuration means github.com is the only host anyone resolves.
+    """
+    hosts = load_config().get("github_hosts")
+    return hosts if isinstance(hosts, list) else []
+
+
+def _gh_host_pattern() -> str:
+    hosts = ["github.com"] + [h["host"] for h in github_hosts() if h.get("host")]
+    return "|".join(re.escape(h) for h in hosts)
+
+
+def gh_pr_url_re() -> re.Pattern:
+    """Built fresh from the configured hosts: the config can change between calls in tests."""
+    return re.compile(r"(" + _gh_host_pattern() + r")/([\w.-]+/[\w.-]+)/(?:pull|issues)/(\d+)")
+
+
+URL_RE = re.compile(r"https?://[^\s\"'<>)\\\]]+")
+# An issue key in the URL path — Linear (`/issue/ABC-123`), Jira (`/browse/ABC-123`)
+# and anything else that numbers issues the same way. No tracker is named here.
+ISSUE_KEY_RE = re.compile(r"/([A-Z][A-Z0-9]{1,9}-\d+)(?=[/?#]|$)")
+# A `gh pr`/`gh issue` command names its number without a URL — but only the
+# subcommands that act on ONE of them. `gh pr list --limit 15` names no PR, and
+# reading the first number of the command turned `--interval 15` into PR #15.
+GH_CMD_RE = re.compile(r"\bgh\s+(?:pr|issue)\s+"
+                       r"(view|checks|merge|comment|diff|edit|close|reopen|ready|review)"
+                       r"((?:\s+[^\s\"';|&]+)*)")
+GH_CMD_REPO_RE = re.compile(r"(?:-R|--repo)[=\s]+([\w.-]+/[\w.-]+)")
+
+NOISE_EXT = (".svg", ".png", ".ico", ".gif", ".css", ".js", ".woff", ".woff2")
+NOISE_HOST_PREFIX = ("static.", "cdn.", "assets.")
+TASK_DONE_RE = re.compile(r"<task-id>([^<]+)</task-id>")
+
+
+def run(cmd, env=None, timeout=30):
+    """Run a command, return (ok, stdout). Never raises."""
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           shell=isinstance(cmd, str), env=env)
+        return p.returncode == 0, p.stdout.strip() or p.stderr.strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, str(e)
+
+
+def pr_number(args: str) -> str | None:
+    """The PR/issue number in a `gh` command, or None.
+
+    `gh` takes it as the first argument, so only that one counts. Reading any
+    number of the command turned `--interval 15` into PR #15 and the `2>` of a
+    redirection into PR #2 — and no flag list tells a boolean flag from one
+    that eats the next token, so anything after a flag is not trusted.
+    """
+    first = args.split()[:1]
+    return first[0] if first and first[0].isdigit() else None
+
+
+# ── transcript ────────────────────────────────────────────────────────────
+
+def find_transcript(session: str, project: Path) -> Path | None:
+    slug = str(project.resolve()).replace("/", "-")
+    d = PROJECTS_DIR / slug
+    if session != "auto":
+        for f in d.glob(f"{session}*.jsonl"):
+            return f
+        # Session id may belong to another project — search all slugs.
+        for f in PROJECTS_DIR.glob(f"*/{session}*.jsonl"):
+            return f
+        return None
+    files = recent_transcripts(project, limit=1)
+    return files[0] if files else None
+
+
+def recent_transcripts(project: Path, limit: int = 4, max_age_h: float = 12) -> list[Path]:
+    """The project's transcripts, newest first: the open sessions of this repo.
+
+    The session with the task list and the session that touched a PR are often
+    different files (a worktree writes to its own slug), so the panel reads the
+    newest for the plan and all of them for the references.
+    """
+    slug = str(project.resolve()).replace("/", "-")
+    files = [f for sub in project_dirs(slug) for f in sub.glob("*.jsonl")]
+    files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    floor = time.time() - max_age_h * 3600
+    fresh = [f for f in files if f.stat().st_mtime >= floor]
+    return (fresh or files[:1])[:limit]
+
+
+def project_dirs(slug: str):
+    """The project's transcript dir, plus the dirs of projects under it.
+
+    A session that moves into a git worktree (`.claude/worktrees/<branch>`)
+    writes to another slug, while the tmux pane stays in the repository root.
+    """
+    yield PROJECTS_DIR / slug
+    for d in sorted(PROJECTS_DIR.glob(f"{slug}-*")):
+        if d.is_dir():
+            yield d
+
+
+def iter_events(path: Path):
+    """Yield parsed transcript lines; skip malformed ones (partial writes)."""
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+
+def _instant(ts: str) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+
+def seen_at(entry: dict, ts: str) -> None:
+    """Move the entry's last mention forward. An event without a timestamp
+    must not erase the time of one that had it, and two stamps are compared as
+    instants: the panel reads them that way, and a string compare puts
+    `...00Z` above `...00.500Z`."""
+    now, kept = _instant(ts), _instant(entry.get("last_ts", ""))
+    if now is not None and (kept is None or now > kept):
+        entry["last_ts"] = ts
+
+
+def extract_refs(events, default_repo: str | None):
+    """Chronological scan → (github refs, links, touched md files).
+
+    github: {"repo#num": {"host","repo","num","first_ts","last_ts","count","url"}}
+    links:  {url: {"count","last_ts"}}
+    """
+    github, links, touched_md = {}, {}, []
+    pr_url_re = gh_pr_url_re()
+    for d in events:
+        ts = d.get("timestamp") or ""
+        msg = d.get("message")
+        blobs = []
+        if isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, str):
+                blobs.append(content)
+            elif isinstance(content, list):
+                for b in content:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "text":
+                        blobs.append(b.get("text", ""))
+                    elif b.get("type") == "tool_use":
+                        inp = b.get("input", {})
+                        # File bodies are code, not session references — fixture
+                        # URLs/PR numbers inside them would self-contaminate.
+                        scan = {k: v for k, v in inp.items()
+                                if k not in ("content", "new_string", "old_string")}
+                        blobs.append(json.dumps(scan, ensure_ascii=False))
+                        fp = inp.get("file_path", "")
+                        if b.get("name") in ("Write", "Edit") and fp.endswith(".md"):
+                            touched_md.append(fp)
+        for blob in blobs:
+            for m in pr_url_re.finditer(blob):
+                host, repo, num = m.group(1), m.group(2), m.group(3)
+                key = f"{repo}#{num}"
+                e = github.setdefault(key, {"host": host, "repo": repo, "num": int(num),
+                                            "first_ts": ts, "last_ts": ts, "count": 0,
+                                            "url": f"https://{host}/{repo}/pull/{num}"})
+                e["count"] += 1
+                seen_at(e, ts)
+            for m in GH_CMD_RE.finditer(blob):
+                args = m.group(2)
+                repo_m = GH_CMD_REPO_RE.search(args)
+                repo = repo_m.group(1) if repo_m else default_repo
+                if not repo:
+                    continue
+                num = pr_number(GH_CMD_REPO_RE.sub(" ", args) if repo_m else args)
+                if not num:
+                    continue
+                key = f"{repo}#{num}"
+                e = github.setdefault(key, {"host": "github.com", "repo": repo,
+                                            "num": int(num), "first_ts": ts, "last_ts": ts,
+                                            "count": 0,
+                                            "url": f"https://github.com/{repo}/pull/{num}"})
+                e["count"] += 1
+                seen_at(e, ts)
+            for m in URL_RE.finditer(blob):
+                url = m.group(0).rstrip(".,;:`")
+                if "{" in url:  # template string, not a real link
+                    continue
+                if pr_url_re.search(url):
+                    continue
+                base = url.split("?")[0]
+                host = base.split("/")[2] if "://" in base else ""
+                if base.lower().endswith(NOISE_EXT) or host.startswith(NOISE_HOST_PREFIX):
+                    continue
+                e = links.setdefault(base, {"count": 0, "last_ts": ts})
+                e["count"] += 1
+                e["last_ts"] = ts
+    return {"github": github, "links": links, "touched_md": touched_md}
+
+
+# ── github resolve ────────────────────────────────────────────────────────
+
+def gh_env(host: str):
+    if host == "github.com":
+        return None
+    proxy = next((h.get("proxy") for h in github_hosts() if h.get("host") == host), None)
+    env = dict(os.environ, GH_HOST=host)
+    if proxy:
+        env["HTTPS_PROXY"] = proxy
+    return env
+
+
+# One query answers every pull request of a session, and the answer is kept on
+# disk. The panel polls every 5s: asking `gh` per pull request, twice, on every
+# poll spent a 5000/hour budget in under half an hour, and every session and
+# every host draws on the same one.
+CACHE_FILE = Path.home() / ".cache" / "devmachine-infer" / "prs.json"
+FRESH_OPEN = 90
+FRESH_TERMINAL = 24 * 3600
+FRESH_UNKNOWN = 600
+RATE_LIMIT_PAUSE = 300
+CACHE_KEEP = 7 * 24 * 3600
+TERMINAL_STATES = {"merged", "closed"}
+
+_PR_FIELDS = ("number state isDraft title url reviewDecision "
+              "reviewThreads(first: 100) { nodes { isResolved } } "
+              "commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }")
+
+_ROLLUP = {"SUCCESS": "pass", "FAILURE": "fail", "ERROR": "fail",
+           "PENDING": "pending", "EXPECTED": "pending"}
+
+
+def cache_key(entry: dict) -> str:
+    return f"{entry['host']}|{entry['repo']}#{entry['num']}"
+
+
+def cache_load(path: Path = CACHE_FILE) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def cache_save(cache: dict, path: Path = CACHE_FILE) -> None:
+    """Write through a neighbour file: two polls can land at once, and half a
+    JSON document reads as no cache at all."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(cache))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def batch_query(entries: list[dict]) -> str:
+    parts = []
+    for i, e in enumerate(entries):
+        owner, name = e["repo"].split("/", 1)
+        parts.append(f"a{i}: repository(owner: {json.dumps(owner)}, name: {json.dumps(name)})"
+                     f" {{ pullRequest(number: {int(e['num'])}) {{ {_PR_FIELDS} }} }}")
+    return "query {" + " ".join(parts) + "}"
+
+
+def _rollup_of(node: dict) -> str:
+    commits = (node.get("commits") or {}).get("nodes") or []
+    if not commits:
+        return "none"
+    rollup = ((commits[0] or {}).get("commit") or {}).get("statusCheckRollup")
+    return _ROLLUP.get((rollup or {}).get("state", ""), "none")
+
+
+def _unresolved(node: dict) -> int | None:
+    nodes = (node.get("reviewThreads") or {}).get("nodes")
+    if nodes is None:
+        return None
+    return sum(1 for t in nodes if not t.get("isResolved"))
+
+
+def parse_batch(out: str, entries: list[dict]) -> tuple[dict, bool, bool]:
+    """(cache key -> what GitHub says, hit the rate limit, GitHub answered).
+
+    A reference the transcript names is not always a pull request GitHub will
+    show — an issue number, a repository nobody here can read. That answer is
+    an answer, and keeping it is what stops the panel asking again every poll.
+    """
+    try:
+        payload = json.loads(out)
+    except json.JSONDecodeError:
+        return {}, "rate limit" in out.lower(), False
+    errors = payload.get("errors") or []
+    limited = any(e.get("type") == "RATE_LIMIT" for e in errors)
+    data = payload.get("data") or {}
+    resolved = {}
+    answered = "data" in payload and not limited
+    for i, entry in enumerate(entries):
+        node = (data.get(f"a{i}") or {}).get("pullRequest")
+        if not node:
+            continue
+        draft = bool(node.get("isDraft"))
+        state = node.get("state", "")
+        resolved[cache_key(entry)] = {
+            "title": node.get("title", ""),
+            "url": node.get("url") or entry["url"],
+            "isDraft": draft,
+            "state": ("merged" if state == "MERGED"
+                      else "draft" if draft else state.lower()),
+            "review": node.get("reviewDecision") or None,
+            "ci": _rollup_of(node),
+            "threads": _unresolved(node),
+        }
+    return resolved, limited, answered
+
+
+def group_by_host(entries: list[dict]) -> list[tuple[str, list[dict]]]:
+    """One query per host: they are different GitHub installations."""
+    by_host: dict[str, list[dict]] = {}
+    for e in entries:
+        by_host.setdefault(e["host"], []).append(e)
+    return sorted(by_host.items())
+
+
+def _is_fresh(row: dict, now: float) -> bool:
+    """A merged or closed pull request has nothing left to change, and one
+    GitHub would not show is worth asking about far less often than an open
+    one."""
+    state = row.get("pr", {}).get("state")
+    ttl = (FRESH_TERMINAL if state in TERMINAL_STATES
+           else FRESH_UNKNOWN if state == "unknown"
+           else FRESH_OPEN)
+    return now - row.get("at", 0) < ttl
+
+
+def _unresolved_entry(entry: dict, bare: bool = False) -> dict:
+    unknown = {"state": "unknown", "isDraft": False, "title": entry.get("title", ""),
+               "url": entry["url"], "review": None, "ci": "none", "threads": None}
+    return unknown if bare else {**entry, **unknown}
+
+
+def resolve_all(entries: dict, cache_path: Path = CACHE_FILE,
+                now: float | None = None) -> list[dict]:
+    now = time.time() if now is None else now
+    cache = cache_load(cache_path)
+    rows = cache.get("prs") or {}
+    wanted = list(entries.values())
+    stale = [e for e in wanted
+             if not _is_fresh(rows.get(cache_key(e), {}), now)]
+
+    if stale and now >= (cache.get("pausedUntil") or 0):
+        limited = False
+        for host, group in group_by_host(stale):
+            ok, out = run(["gh", "api", "graphql", "-f", "query=" + batch_query(group)],
+                          env=gh_env(host))
+            resolved, hit, answered = parse_batch(out, group)
+            limited = limited or hit or (not ok and "rate limit" in out.lower())
+            for key, pr in resolved.items():
+                rows[key] = {"at": now, "pr": pr}
+            if answered:
+                for entry in group:
+                    key = cache_key(entry)
+                    if key not in resolved:
+                        rows[key] = {"at": now, "pr": _unresolved_entry(entry, bare=True)}
+        # Asking again inside the hour only spends what is no longer there;
+        # the panel keeps showing the last answer meanwhile.
+        cache["pausedUntil"] = now + RATE_LIMIT_PAUSE if limited else 0
+        keys = {cache_key(e) for e in wanted}
+        cache["prs"] = {k: r for k, r in rows.items()
+                        if k in keys or now - r.get("at", 0) < CACHE_KEEP}
+        cache_save(cache, cache_path)
+
+    out = []
+    for entry in wanted:
+        row = rows.get(cache_key(entry))
+        out.append({**entry, **row["pr"]} if row else _unresolved_entry(entry))
+    return out
+
+
+# ── git / plans ───────────────────────────────────────────────────────────
+
+def default_repo_of(project: Path) -> str | None:
+    ok, out = run(["git", "-C", str(project), "remote", "get-url", "origin"])
+    if not ok:
+        return None
+    m = re.search(r"(?:" + _gh_host_pattern() + r")[:/]([\w.-]+/[\w.-]+?)(?:\.git)?$", out)
+    return m.group(1) if m else None
+
+
+def git_state(project: Path) -> dict:
+    ok, branch = run(["git", "-C", str(project), "branch", "--show-current"])
+    if not ok:
+        return {"branch": None}
+    _, dirty = run(["git", "-C", str(project), "status", "--porcelain"])
+    ab_ok, ab = run(["git", "-C", str(project), "rev-list", "--left-right", "--count",
+                     "@{upstream}...HEAD"])
+    behind = ahead = None
+    if ab_ok and ab:
+        parts = ab.split()
+        if len(parts) == 2:
+            behind, ahead = int(parts[0]), int(parts[1])
+    return {"branch": branch, "dirty": bool(dirty), "ahead": ahead, "behind": behind}
+
+
+def parse_plan(path: Path) -> dict | None:
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return None
+    items = [{"text": m.group(2).strip(), "checked": m.group(1).lower() == "x"}
+             for m in re.finditer(r"^\s*[-*] \[([ xX])\]\s+(.+)$", text, re.M)]
+    if not items:
+        return None
+    return {"path": str(path), "done": sum(i["checked"] for i in items),
+            "total": len(items), "items": items,
+            "mtime": path.stat().st_mtime}
+
+
+def collect_plans(project: Path, touched_md: list[str]) -> list[dict]:
+    candidates: dict[str, Path] = {}
+    for sub in ("docs/superpowers/specs", "docs/superpowers/plans"):
+        d = project / sub
+        if d.is_dir():
+            for f in d.glob("*.md"):
+                candidates[str(f)] = f
+    for fp in touched_md:
+        p = Path(fp)
+        if p.is_file():
+            candidates[str(p)] = p
+    plans = [p for p in (parse_plan(f) for f in candidates.values()) if p]
+    plans.sort(key=lambda p: p["mtime"], reverse=True)
+    for p in plans:
+        del p["mtime"]
+    return plans
+
+
+# ── tmux / cwd ────────────────────────────────────────────────────────────
+
+def cwd_for_session(session: str) -> str | None:
+    ok, out = run(["tmux", "display", "-p", "-t", session, "#{pane_current_path}"])
+    p = out.strip()
+    return p if ok and p else None
+
+
+# ── todos / plan ──────────────────────────────────────────────────────────
+
+_TODO_STATE = {"completed": "done", "in_progress": "active", "pending": "pending"}
+
+
+def latest_todos(events) -> list[dict]:
+    return latest_tasks(events) or todo_write_items(events)
+
+
+def latest_tasks(events) -> list[dict]:
+    """TaskCreate/TaskUpdate checklist (Claude Code 2.1.2xx), in creation order.
+
+    State comes from `toolUseResult`, never from the tool call: the model
+    sometimes calls TaskCreate with a batch `tasks` argument, which the tool
+    rejects — the call is in the transcript, the task never existed.
+    """
+    tasks: dict[str, dict] = {}
+    for d in events:
+        res = d.get("toolUseResult")
+        if not isinstance(res, dict):
+            continue
+        created = res.get("task")
+        if isinstance(created, dict) and created.get("id") is not None:
+            tasks[str(created["id"])] = {"text": created.get("subject", ""),
+                                         "state": "pending"}
+            continue
+        if not res.get("success"):
+            continue
+        task = tasks.get(str(res.get("taskId")))
+        to = (res.get("statusChange") or {}).get("to")
+        if task and to:
+            task["state"] = _TODO_STATE.get(to, task["state"])
+    return list(tasks.values())
+
+
+def todo_write_items(events) -> list[dict]:
+    latest = None
+    for d in events:
+        msg = d.get("message")
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "TodoWrite":
+                todos = b.get("input", {}).get("todos")
+                if isinstance(todos, list):
+                    latest = todos
+    if not latest:
+        return []
+    return [{"text": t.get("content", ""),
+             "state": _TODO_STATE.get(t.get("status", ""), "pending")}
+            for t in latest if isinstance(t, dict)]
+
+
+def build_plan(todos: list[dict]) -> dict | None:
+    if not todos:
+        return None
+    done = sum(1 for t in todos if t["state"] == "done")
+    return {"title": "todos", "source": "todos",
+            "done": done, "total": len(todos), "items": todos}
+
+
+# ── background work (monitors, shells, subagents) ─────────────────────────
+
+def _task_label(inp: dict, keys: tuple, limit: int = 56) -> str:
+    for k in keys:
+        v = (inp.get(k) or "")
+        if isinstance(v, str) and v.strip():
+            text = v.strip().splitlines()[0]
+            return text if len(text) <= limit else text[:limit - 1] + "…"
+    return ""
+
+
+def extract_background(events) -> dict:
+    """Work that runs outside the turn: monitors, background shells, subagents.
+
+    Each one ends with the `<task-notification>` for its id, never with the
+    tool_result — the tool returns as soon as the work is launched.
+    """
+    tool_inputs, result_ids, finished = {}, set(), set()
+    monitors, shells, subagents, dispatches = {}, {}, {}, {}
+    started, newest = {}, ""
+    for d in events:
+        stamp = d.get("timestamp")
+        if isinstance(stamp, str) and stamp > newest:
+            newest = stamp
+        text = d.get("content")
+        if isinstance(text, str):
+            finished.update(TASK_DONE_RE.findall(text))
+        # A task notification is not a message: it arrives as an attachment
+        # record whose prompt carries the `<task-id>`. Reading only messages
+        # left every background task marked as running for ever.
+        attachment = d.get("attachment")
+        if isinstance(attachment, dict):
+            # Claude has emitted queued task notifications under both keys:
+            # older transcripts use `prompt`, current ones use `text`.
+            for field in ("prompt", "text"):
+                notification = attachment.get(field)
+                if isinstance(notification, str):
+                    finished.update(TASK_DONE_RE.findall(notification))
+        result = d.get("toolUseResult")
+        if isinstance(result, dict):
+            # Current Claude transcripts record a collected background task as
+            # a TaskOutput result instead of emitting an XML notification.
+            task_id = result.get("task_id")
+            if isinstance(task_id, str):
+                finished.add(task_id)
+        msg = d.get("message")
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            finished.update(TASK_DONE_RE.findall(content))
+        for b in content if isinstance(content, list) else []:
+            if not isinstance(b, dict):
+                continue
+            kind = b.get("type")
+            if kind == "text":
+                finished.update(TASK_DONE_RE.findall(b.get("text", "")))
+            elif kind == "tool_use" and b.get("id"):
+                tool_inputs[b["id"]] = b.get("input", {}) or {}
+                if b.get("name") in ("Task", "Agent"):
+                    dispatches[b["id"]] = tool_inputs[b["id"]]
+            elif kind == "tool_result":
+                tuid = b.get("tool_use_id")
+                if tuid:
+                    result_ids.add(tuid)
+                res = d.get("toolUseResult")
+                if not isinstance(res, dict):
+                    continue
+                inp = tool_inputs.get(tuid, {})
+                if res.get("backgroundTaskId"):
+                    shells[res["backgroundTaskId"]] = _task_label(inp, ("description", "command"))
+                    started[res["backgroundTaskId"]] = d.get("timestamp")
+                elif res.get("taskId") and "timeoutMs" in res:
+                    monitors[res["taskId"]] = _task_label(inp, ("description", "command"))
+                    started[res["taskId"]] = d.get("timestamp")
+                elif res.get("isAsync") and res.get("agentId"):
+                    subagents[res["agentId"]] = (res.get("description")
+                                                 or _task_label(inp, ("description", "subagent_type", "prompt")))
+                    started[res["agentId"]] = d.get("timestamp")
+    def still_running(group):
+        return [{"label": label or key, "status": "running"}
+                for key, label in group.items()
+                if key not in finished and not _is_stale(started.get(key), newest)]
+
+    agents = still_running(subagents)
+    for tid, inp in dispatches.items():
+        if tid not in result_ids:
+            agents.append({"label": _task_label(inp, ("description", "subagent_type", "prompt")) or tid,
+                           "status": "running"})
+    return {"monitors": still_running(monitors),
+            "shells": still_running(shells),
+            "agents": agents}
+
+
+# A notification can go missing — the session ends, the app restarts, the
+# harness drops it. Without a cutoff that task spins in the panel for ever.
+STALE_AFTER = timedelta(hours=6)
+
+
+def _is_stale(started: str | None, newest: str) -> bool:
+    """True when the task began long before the last thing in the transcript."""
+    if not started or not newest:
+        return False
+    try:
+        began = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        last = datetime.fromisoformat(newest.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return last - began > STALE_AFTER
+
+
+def merge_refs(dst: dict, src: dict) -> None:
+    """Fold another transcript's references into the first one's."""
+    for kind in ("github", "links"):
+        for key, entry in src[kind].items():
+            kept = dst[kind].setdefault(key, entry)
+            if kept is not entry:
+                kept["count"] = kept.get("count", 0) + entry.get("count", 0)
+                seen_at(kept, entry.get("last_ts", ""))
+
+
+# ── prs / links ───────────────────────────────────────────────────────────
+
+_REVIEW = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes",
+           "REVIEW_REQUIRED": "required", "": "none", None: "none"}
+
+
+def map_prs(github: list[dict]) -> list[dict]:
+    out = []
+    for g in github:
+        state = "draft" if g.get("isDraft") else g.get("state", "open").lower()
+        pr = {"number": g["num"], "repo": g["repo"], "title": g.get("title", ""),
+              "url": g["url"], "ci": g.get("ci", "none"),
+              "review": _REVIEW.get(g.get("review"), "none"), "state": state}
+        if g.get("threads"):
+            pr["threads"] = g["threads"]
+        if g.get("last_ts"):
+            pr["lastSeen"] = g["last_ts"]
+        out.append(pr)
+    return out
+
+
+def _label(url: str) -> str:
+    s = re.sub(r"^https?://", "", url).rstrip("/")
+    return s if len(s) <= 48 else s[:47] + "…"
+
+
+def service_of(url: str) -> str:
+    """The service a URL belongs to, from its domain: linear, atlassian, github.
+
+    No tracker is special-cased — a new one names itself.
+    """
+    host = re.sub(r"^https?://", "", url).split("/")[0].split(":")[0]
+    parts = [p for p in host.split(".") if p != "www"]
+    name = parts[-2] if len(parts) >= 2 else (parts[0] if parts else "web")
+    # gist.githubusercontent.com and friends are the same service as the site.
+    return name[: -len("usercontent")] if name.endswith("usercontent") else name
+
+
+def map_links(links: list[dict]) -> list[dict]:
+    """One row per link. The same issue reached by two URLs is one row."""
+    out, seen_keys = [], set()
+    for l in links:
+        key = ISSUE_KEY_RE.search(l["url"])
+        if key:
+            if key.group(1) in seen_keys:
+                continue
+            seen_keys.add(key.group(1))
+        out.append({"url": l["url"],
+                    "label": key.group(1) if key else _label(l["url"]),
+                    "kind": service_of(l["url"])})
+    return out
+
+
+# ── main ──────────────────────────────────────────────────────────────────
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def build_context(session: str | None, project: str | None, resolve: bool) -> dict:
+    # No session name means the caller already knows the folder (the Mac, where
+    # sessions live in zmx, which tmux cannot answer for).
+    cwd = (cwd_for_session(session) if session else None) or project or "."
+    proj = Path(cwd)
+    tx = find_transcript("auto", proj)
+    if tx is None:
+        return {"cwd": str(proj), "isClaude": False, "updatedAt": _now(),
+                "plan": None, "prs": [], "links": [],
+                "agents": [], "monitors": [], "shells": []}
+    events = list(iter_events(tx))
+    repo = default_repo_of(proj)
+    refs = extract_refs(events, repo)
+    for other_tx in recent_transcripts(proj):
+        if other_tx != tx:
+            merge_refs(refs, extract_refs(iter_events(other_tx), repo))
+    todos = latest_todos(events)
+    github = resolve_all(refs["github"]) if resolve else list(refs["github"].values())
+    links = [{"url": u, **v} for u, v in refs["links"].items()]
+    return {"cwd": str(proj), "isClaude": True, "updatedAt": _now(),
+            "plan": build_plan(todos),
+            "prs": map_prs(github),
+            "links": map_links(links),
+            **extract_background(events)}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--session", default=None, help="tmux session name; omit to use --project")
+    ap.add_argument("--project", default=None, help="fallback project dir if tmux lookup fails")
+    ap.add_argument("--no-resolve", action="store_true", help="skip gh lookups")
+    args = ap.parse_args()
+
+    if not args.session and not args.project:
+        ap.error("give --session, --project, or both")
+    ctx = build_context(args.session, args.project, resolve=not args.no_resolve)
+    print(json.dumps(ctx, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

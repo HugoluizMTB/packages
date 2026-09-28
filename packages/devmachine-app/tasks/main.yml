@@ -1,0 +1,43 @@
+---
+# The infer package put a copy of the context script in each home. Nothing
+# calls those any more; the app reaches this package's entrypoint instead.
+- name: Remove the per-workspace copies the infer package left
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.local/bin/devmachine-infer"
+    state: absent
+  loop: "{{ devmachine_workspaces | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: ansible_facts['system'] == 'Linux'
+
+- name: Create the config directory
+  ansible.builtin.file:
+    path: /etc/devmachine-app
+    state: directory
+    mode: "0755"
+  become: true
+  when: ansible_facts['system'] == 'Linux'
+
+# Every workspace account reads this file, so it lives beside root's own
+# config rather than any one workspace's home.
+- name: Write the config, Linux
+  ansible.builtin.copy:
+    dest: /etc/devmachine-app/config.json
+    mode: "0644"
+    content: "{{ {'github_hosts': devmachine_devmachine_app_github_hosts} | to_nice_json }}\n"
+  become: true
+  when: ansible_facts['system'] == 'Linux'
+
+- name: Create the config directory, macOS
+  ansible.builtin.file:
+    path: "{{ ansible_facts['env']['HOME'] }}/.config/devmachine-app"
+    state: directory
+    mode: "0755"
+  when: ansible_facts['system'] == 'Darwin'
+
+- name: Write the config, macOS
+  ansible.builtin.copy:
+    dest: "{{ ansible_facts['env']['HOME'] }}/.config/devmachine-app/config.json"
+    mode: "0644"
+    content: "{{ {'github_hosts': devmachine_devmachine_app_github_hosts} | to_nice_json }}\n"
+  when: ansible_facts['system'] == 'Darwin'

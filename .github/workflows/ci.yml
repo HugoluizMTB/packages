@@ -37,6 +37,14 @@ jobs:
       - name: Run every provider's tests
         run: python3 -m unittest discover -s packages -p 'test_*.py' -v
 
+      # devmachine-app's tests are pytest-style (fixtures, monkeypatch) and
+      # `unittest discover` above collects none of them.
+      - name: Install pytest
+        run: pipx install pytest
+
+      - name: Run devmachine-app's tests
+        run: pytest -q packages/devmachine-app/test
+
   syntax:
     runs-on: ubuntu-latest
     steps:
