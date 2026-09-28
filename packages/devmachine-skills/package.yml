@@ -3,6 +3,6 @@ name: devmachine-skills
 scope: workspace
 summary: Agent skills for operating Devmachine.
 requires:
-  cli: ">= 0.7.0"
+  cli: ">= 0.7.5"
 skills:
   path: skills

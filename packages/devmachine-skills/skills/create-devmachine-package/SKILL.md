@@ -1,6 +1,6 @@
 ---
 name: create-devmachine-package
-description: Use when desired persistent machine or workspace state has no suitable Devmachine package, or when converting repeatable custom setup into a package.
+description: Use when writing or editing a Devmachine package — a new Ansible role plus package.yml for persistent machine or workspace state that has no suitable existing package, or converting repeatable custom setup into one. Not for running an existing package or operating the CLI (see use-devmachine).
 ---
 
 # Create a Devmachine Package
@@ -28,12 +28,27 @@ devmachine packages new <name> --scope machine|workspace --into <config-dir>/pac
 devmachine packages validate <config-dir>/packages/<name>
 ```
 
-Read the current
-[`reference/package-format.md`](https://github.com/adevmachine/cli/blob/main/docs/reference/package-format.md)
-and the generated skeleton before editing. Keep tasks idempotent and portable:
-use Ansible modules, declare `needs`, avoid direct `apt`, and put defaults in
-the role. A package may also contribute complete Agent Skill directories with
-`skills.path`; the CLI owns canonical installation and harness adapters.
+Read `references/package-format.md` and the generated skeleton before editing.
+Keep tasks idempotent and portable: use Ansible modules, declare `needs`, avoid
+direct `apt`, and put defaults in the role. A package may also contribute
+complete Agent Skill directories with `skills.path`; the CLI owns canonical
+installation and harness adapters.
+
+## Reference
+
+Read the matching file under `references/` before guessing at the manifest
+format:
+
+| Question | File |
+| --- | --- |
+| The package manifest format (`package.yml`, `needs`, `kind`, `entrypoint`) | `references/package-format.md` |
+| Writing a DNS provider package | `references/dns-provider-contract.md` |
+| How scope, ordering, and overrides work | `references/concepts/packages.md` |
+
+These are copies of the CLI's own docs, kept in sync by
+`scripts/sync-skill-references.sh`. When a copy disagrees with the installed
+binary, the binary wins: prefer `devmachine packages schema` and `devmachine
+<command> --help` for the running binary's own truth.
 
 ## Prove it on a fake target
 

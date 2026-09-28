@@ -71,3 +71,29 @@ jobs:
       # is.
       - name: Check for real data
         run: ./scripts/check-no-real-data.sh
+
+  skill-references:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The skills carry a verbatim copy of the CLI's own docs, so an agent
+      # can operate the CLI offline. This checks that copy against the CLI's
+      # latest release, not its main branch, since a release is what ships.
+      - name: Fetch the CLI's latest release docs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          tag="$(gh release view --repo adevmachine/cli --json tagName -q .tagName)"
+          gh repo clone adevmachine/cli /tmp/cli-docs -- --depth 1 --branch "$tag"
+
+      - name: Check the skill references are in sync
+        run: |
+          set -e
+          ./packages/devmachine-skills/scripts/sync-skill-references.sh \
+            /tmp/cli-docs/docs --check || {
+            echo "::error::skill references are out of date. Run" \
+              "'scripts/sync-skill-references.sh <cli-docs-checkout>' and commit the result."
+            exit 1
+          }
