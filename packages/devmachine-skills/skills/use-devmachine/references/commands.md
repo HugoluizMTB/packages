@@ -24,7 +24,7 @@ administrative login, a port and a domain, then how the CLI should log in:
 
 1. a key of its own, kept in `<config>/keys/<machine>` and used for nothing
    else — the recommendation, and the answer if you have no opinion;
-2. a key file already on this computer;
+2. a key file already on your computer;
 3. a key your SSH agent holds, offered by fingerprint and comment.
 
 The third is how a key kept in a password manager works: it never touches the
@@ -166,22 +166,23 @@ a configuration.
 ```
 devmachine machines list                  each machine, its addresses, port and workspaces
 devmachine machines add [--no-harden]     take over another machine and record it
-devmachine machines add --self <name>     add this computer as a machine, with no address
+devmachine machines add --self <name>     add your computer as a machine, with no address
 devmachine machines trust [name] [--check] [--replace] [--yes]   inspect or update its SSH host key
 devmachine machines rm <name> [--yes]     forget a machine; the server keeps running
-devmachine machines create-local <name>   a machine on this computer
+devmachine machines create-local <name>   a machine on your computer
 devmachine machines start <name>          start a local machine
 devmachine machines stop <name>           stop a local machine
 devmachine machines delete-local <name> [--yes]   destroy it and everything on it
 ```
 
 `list --format json` prints each machine with `name`, `hosts`, `admin_user`,
-`port`, `key` and `workspaces`, and `self: true` on the one that is this
-computer — how a program finds the machine to run something locally.
+`port`, `key` and `workspaces`, and `self: true` on the one that is your
+computer as a machine — how a program finds the machine to run something
+locally.
 
-**This computer is never the implicit choice.** With one server and a `self`
+**Your computer is never the implicit choice.** With one server and a `self`
 machine, a command without `--machine` acts on the server, as it did before
-this computer was added; the `self` machine is reached only by name. With two
+your computer was added; the `self` machine is reached only by name. With two
 or more servers, the command still refuses to guess.
 
 `setup` writes the first machine; `add` writes every one after it. It asks the
@@ -199,12 +200,12 @@ which makes a Lima VM: that VM has its own address and key, like any other
 machine; `self` has none, because it is the one you are standing on.
 
 A self machine has no `hosts`, `user`, `port` or `key`, and `sync` writes its
-bundle to a directory on this computer and runs Ansible without SSH instead of
+bundle to a directory on your computer and runs Ansible without SSH instead of
 sending it over the network. Every command that needs an actual address to
 reach a machine over SSH — `ssh`, `mosh`, `tunnel`, `login`, `expose`, `dns`
 where it points a record at the machine, `machines trust`, and `aliases`
 (which silently leaves it out, since there is no `Host` entry to write for it)
-— refuses on a self machine with the same message: `<name> is this computer
+— refuses on a self machine with the same message: `<name> is your computer
 (self: true): <command> needs a machine it reaches over SSH`. A workspace can
 never run on a self machine: a workspace is a Linux account on a server, and a
 self machine is not one.
@@ -225,9 +226,9 @@ It asks first unless `--yes` is given, and it refuses to leave a workspace
 pointing at a machine that is no longer there.
 
 **`rm` is not `delete-local`.** They look alike and only one destroys anything:
-`rm` forgets a server, `delete-local` erases a machine on this computer.
+`rm` forgets a server, `delete-local` erases a machine on your computer.
 
-`create-local` builds a machine on this computer and hands it back as an
+`create-local` builds a machine on your computer and hands it back as an
 ordinary machine: an address, a port and an admin login. It comes up the way a
 bought server arrives — root reachable over SSH with a password and **no key
 installed** — so `devmachine setup` has the same work to do on it as on
@@ -338,9 +339,11 @@ devmachine skills remove <name> [--yes]
 
 These commands manage Agent Skills on the current computer and never contact a
 configured machine. Bare `add` resolves `devmachine-skills` from the pinned
-package release even if a local package has the same name. `--package` accepts
-only a local package. Without `--agent`, interactive use detects installed
-harnesses and asks which ones to enable.
+package release even if a local package has the same name. Before `setup` has
+ever run, there is no pinned release yet, so it takes the latest published
+packages release instead — the same one `setup` would pin for a new
+configuration. `--package` accepts only a local package. Without `--agent`,
+interactive use detects installed harnesses and asks which ones to enable.
 
 `list` reports each managed source, its skills and harnesses. `update` resolves
 every recorded source from the current release pin or local package and
@@ -507,7 +510,7 @@ consent.
 `rm` removes one value, or with none given, every value at that name and
 type. Removing one value out of several is not atomic on every registrar, and
 the command warns before doing it. A name is always the full name (`www.example.com`,
-or the zone itself for the apex) — the CLI turns it into the label the
+or the zone itself for the apex, the root domain of your VPS) — the CLI turns it into the label the
 provider expects.
 
 ## expose
@@ -590,7 +593,7 @@ HTTP. All three have no authentication of their own. All three are `tunnel`.
 | **HTTP** | `expose` | `tunnel` |
 | **Anything else** | nothing | `tunnel` |
 
-`--local` picks the port on this computer, when the remote port is already
+`--local` picks the port on your computer, when the remote port is already
 taken here — a busy port is reported by name, with `--local` offered as the
 way out, rather than a bind error nobody reads.
 
@@ -714,6 +717,7 @@ devmachine packages new <name> [--scope machine|workspace] [--into <dir>]
 devmachine packages validate <dir>
 devmachine packages schema [--json]
 devmachine packages help <name> [--json]
+devmachine packages pin [release]
 ```
 
 `list` reads the recipes and the configuration together, so a package appears
@@ -738,6 +742,12 @@ exits 1 when it found any.
 `schema` prints the `package.yml` format this binary reads. It is the answer
 that cannot drift, because the validator is what enforces it. The whole format
 is in [the package format](https://adevmachine.github.io/docs/reference/package-format/).
+
+`pin` writes `packages: <release>` to `config.yml`: the release of the
+packages repository every recipe is read from. With no release it pins the
+latest one. `setup` pins the latest when it writes a new configuration, so
+this is for moving to a newer release, or for a configuration written by hand.
+A release is a tag such as `v8`, never a branch.
 
 `help` asks an installed package what it accepts, by running its own `help`
 and printing the answer — a table by default, the raw shape under `--json`.

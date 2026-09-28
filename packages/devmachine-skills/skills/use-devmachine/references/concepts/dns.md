@@ -19,7 +19,8 @@ and a provider's own tools for that case.
 
 ## `@` is the apex
 
-The zone itself has no label. Write `@` for it, the way most registrars do:
+The apex is the root domain of your VPS: `example.com`, as opposed to
+`www.example.com` or `app.example.com`. The zone itself has no label. Write `@` for it, the way most registrars do:
 
 ```
 devmachine dns add example.com A 198.51.100.10
@@ -100,7 +101,7 @@ whether or not it has taken effect anywhere else yet. That is a provider
 question, and it needs a provider installed.
 
 `dns status` asks **the public internet**: resolve the name, fetch its
-certificate, make one request — from this computer, the way anybody else would
+certificate, make one request — from your computer, the way anybody else would
 see it. It needs no provider and no machine at all, because it is not asking
 either of them anything; it is asking the internet what they produced.
 

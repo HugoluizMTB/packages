@@ -50,15 +50,15 @@ once — `apt install ansible`, or whatever that distribution calls it — and
 everything after that is `sync`'s job. Everything else in `doctor` still tells
 you the truth without it.
 
-## "ansible-playbook is not on this computer"
+## "ansible-playbook is not on your computer"
 
 The self-machine version of the check above. `sync` and `doctor` both refuse
-before touching anything when Ansible is not on `PATH` on this computer. Run
+before touching anything when Ansible is not on `PATH` on your computer. Run
 `devmachine setup --machine <name>` — on a self machine that only checks
 Homebrew is there and then runs `brew install ansible`, with no key, no
 password and no hardening involved.
 
-## "machine X is this computer (self: true), so it has no hosts"
+## "machine X is your computer (self: true), so it has no hosts"
 
 A machine with `self: true` in `config.yml` also carries `hosts`, `user`,
 `port` or `key` — whichever the message names. There is no address for the
@@ -114,7 +114,7 @@ values live in the keychain.
 
 ## `dns status` says a name does not resolve, but it works in the browser
 
-The check runs from **this computer**, not from the machine, and it does not use
+The check runs from **your computer**, not from the machine, and it does not use
 your browser's cache or a proxy. A name that works in the browser and not here
 usually means DNS has not propagated everywhere yet, or something local — a VPN,
 a `/etc/hosts` entry — is resolving it for you and not for anyone else.
@@ -449,3 +449,11 @@ ssh -O exit -o ControlPath=<user cache dir>/devmachine/cm/%C <user>@<address>
 or, when the exact address is not at hand, delete the stale socket file
 directly from `<user cache dir>/devmachine/cm/`. Either clears it, and the
 next `run` opens a fresh connection.
+
+## "no package named X, and none is available"
+
+Either the name is wrong, or no packages release is pinned. With no
+`packages:` line in `config.yml`, only your local packages exist, so `sync`
+finds nothing called `workspace` or `dev`. Run `devmachine packages pin`,
+which pins the latest release, then `devmachine sync`. A configuration made
+by `setup` from version 0.7.7 on is pinned from the start.
