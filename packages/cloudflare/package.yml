@@ -1,6 +1,7 @@
 format: 1
 name: cloudflare
 scope: machine
+category: DNS
 kind: dns
 summary: DNS zones on Cloudflare.
 entrypoint: bin/provider

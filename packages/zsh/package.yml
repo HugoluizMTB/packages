@@ -1,6 +1,7 @@
 format: 1
 name: zsh
 scope: workspace
+category: Foundation
 summary: >-
   zsh as the account's login shell, Oh My Zsh, a tmux config, and a shell that
   attaches to a tmux session when the connection is over SSH. A tmux server

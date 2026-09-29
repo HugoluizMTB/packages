@@ -1,6 +1,7 @@
 format: 1
 name: glab
 scope: workspace
+category: Developer tools
 summary: >-
   The GitLab CLI, installed into one account's own ~/.local/bin. It installs
   the tool only: the login opens a browser, so a person does it once.

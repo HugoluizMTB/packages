@@ -1,6 +1,7 @@
 format: 1
 name: mac-brew
 scope: machine
+category: macOS
 summary: >-
   Installs Homebrew taps, formulae and casks from lists. Never removes
   anything.

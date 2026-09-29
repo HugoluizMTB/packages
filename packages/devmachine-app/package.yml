@@ -1,6 +1,7 @@
 format: 1
 name: devmachine-app
 scope: machine
+category: macOS
 summary: What the Devmachine macOS app asks a machine for, reached through `devmachine run --package devmachine-app`.
 
 requires:

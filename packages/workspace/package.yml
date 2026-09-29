@@ -1,6 +1,7 @@
 format: 1
 name: workspace
 scope: workspace
+category: Foundation
 summary: >-
   The Linux account a person works in: a home nobody else can read, a git
   identity and ~/dev.

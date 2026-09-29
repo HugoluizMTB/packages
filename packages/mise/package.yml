@@ -1,6 +1,7 @@
 format: 1
 name: mise
 scope: workspace
+category: Foundation
 summary: >-
   mise, the per-project runtime manager, installed for one account and
   activated in ~/.zshenv so it is on the PATH even without a terminal.

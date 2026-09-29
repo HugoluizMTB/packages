@@ -1,6 +1,7 @@
 format: 1
 name: claude-plugins
 scope: workspace
+category: Coding agents
 summary: >-
   Installs and updates Claude Code plugins in one account. It knows how, never
   which: the marketplace and the plugin list are the operator's, and with no

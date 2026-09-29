@@ -1,6 +1,7 @@
 format: 1
 name: hostinger
 scope: machine
+category: DNS
 kind: dns
 summary: DNS zones on Hostinger.
 entrypoint: bin/provider

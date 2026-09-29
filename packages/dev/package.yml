@@ -1,6 +1,7 @@
 format: 1
 name: dev
 scope: workspace
+category: Foundation
 summary: >-
   The four tools a workspace is expected to have: the GitHub CLI, bun, the Node
   LTS through mise, and unzip. It installs gh and declares the login gh needs;

@@ -1,6 +1,7 @@
 format: 1
 name: caddy
 scope: machine
+category: Web
 summary: >-
   A reverse proxy that gets its own certificates, and a one-page site that
   answers 200 to prove the machine is reachable. Every other site is a file

@@ -1,6 +1,7 @@
 format: 1
 name: claude-code
 scope: workspace
+category: Coding agents
 summary: >-
   The Claude Code CLI for one account, its ~/.claude directory and the
   settings.json the account starts with. Logging in is a person's job, once,

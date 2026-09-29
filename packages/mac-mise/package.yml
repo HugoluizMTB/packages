@@ -1,6 +1,7 @@
 format: 1
 name: mac-mise
 scope: machine
+category: macOS
 summary: Installs mise's global tools from a list.
 
 requires:
