@@ -1,6 +1,6 @@
 ---
 name: create-devmachine-package
-description: Use when writing or editing a Devmachine package — a new Ansible role plus package.yml for persistent machine or workspace state that has no suitable existing package, or converting repeatable custom setup into one. Not for running an existing package or operating the CLI (see use-devmachine).
+description: Use when writing or editing a Devmachine package — a new Ansible role plus package.yml for persistent machine or workspace state that has no suitable existing package, or converting repeatable custom setup into one. Triggers on requests like "make a package for X", "install X on my server as a package", "write an Ansible role for this", "turn this setup into a reusable package", or "add a new package to devmachine". Not for running or adding an EXISTING package to a machine or workspace, or any other CLI operation (see use-devmachine).
 ---
 
 # Create a Devmachine Package

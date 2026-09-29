@@ -1,9 +1,46 @@
 ---
 name: use-devmachine
-description: "Use when running, inspecting, or troubleshooting the Devmachine CLI itself — adding or editing a machine (including the local self:true machine) or workspace, adding a package to one, running sync, expose, tunnel, run --package, or any other devmachine subcommand, or diagnosing a devmachine error. Not for writing a new package's Ansible role (see create-devmachine-package)."
+description: "Use when running, inspecting, or troubleshooting the Devmachine CLI itself, or when answering ANY question about a machine, workspace, server, or VPS it manages — even a read-only one such as \"what's published on the VPS\", \"DNS entries/records for my domain\", \"is my site/subdomain/certificate working\", \"what packages are installed\", \"logins, tokens, API keys or credentials\", \"how much RAM/disk/load\", \"is the server healthy\", \"open/connect to my workspace\", \"run a command on the server\", \"private access to a port\", \"did the host key/fingerprint change\", or \"where is my config\". Covers adding or editing a machine (including the local self:true machine) or workspace, adding a package to one, running sync, expose, tunnel, dns, credentials, secrets, login, run --package, Tailscale addresses, or any other devmachine subcommand. Not for writing a new package's Ansible role (see create-devmachine-package)."
 ---
 
 # Use Devmachine
+
+## First, always
+
+Answer any question about a machine, workspace, DNS, published sites,
+packages, logins, or configuration by running the matching `devmachine
+<command>` below — never by reading or grepping the configuration folder or
+an old Ansible repository by hand, even for a read-only question. This
+applies whether the question is asked directly or comes up while doing
+something else.
+
+A command that contacts a machine (see Safety boundary) still needs the
+person's explicit approval for that exact command. Ask for it — never fall
+back to reading files instead.
+
+## Question → command
+
+| Question or need | Command |
+| --- | --- |
+| What's published / my sites / subdomains / Caddy routes | `devmachine expose list` |
+| Publish a port as a site | `devmachine expose add <workspace> <port> --host <host>` |
+| DNS records / entries of a domain or zone | `devmachine dns list [zone]` |
+| Does my domain/site work, certificate valid | `devmachine dns status [host]` |
+| Add or change a DNS record | `devmachine dns add <name> <type> <value>` |
+| Which DNS providers / zones are available | `devmachine dns providers` |
+| Open / enter / connect to a workspace | `devmachine ssh [workspace]` or `devmachine mosh [workspace]` |
+| Run a command on the server | `devmachine run "<command>"` |
+| How much RAM / disk / load | `devmachine stats` |
+| Is my server healthy / can it connect | `devmachine doctor` |
+| What's installed / add a tool | `devmachine packages list` / `devmachine packages add <name>` then `devmachine sync` |
+| Logins, tokens, API keys, credentials | `devmachine credentials list`, `devmachine login <credential>`, `devmachine secrets set <name>` then `devmachine credentials push` |
+| Private access to a port (not a public site) | `devmachine tunnel <workspace> <port>` |
+| Server fingerprint / host key changed | `devmachine machines trust [name]` |
+| Where is my config / what's in it | `devmachine config path` / `devmachine config show` |
+| List machines / servers | `devmachine machines list` |
+| List workspaces / accounts | `devmachine workspaces list` |
+| SSH aliases for my terminal | `devmachine aliases` |
+| Apply pending changes to the server | `devmachine sync` |
 
 Use the CLI as the source of truth. Do not replace a missing CLI operation with
 ad-hoc SSH or an old Ansible repository without first identifying the missing
