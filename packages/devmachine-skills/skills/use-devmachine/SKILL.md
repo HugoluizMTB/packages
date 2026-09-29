@@ -34,6 +34,7 @@ back to reading files instead.
 | Is my server healthy / can it connect | `devmachine doctor` |
 | What's installed / add a tool | `devmachine packages list` / `devmachine packages add <name>` then `devmachine sync` |
 | Logins, tokens, API keys, credentials | `devmachine credentials list`, `devmachine login <credential>`, `devmachine secrets set <name>` then `devmachine credentials push` |
+| My app's own secret / API key / `.env` value in a workspace | `devmachine secrets set <NAME> --workspace <workspace> [--env-file <path>] --push` |
 | Private access to a port (not a public site) | `devmachine tunnel <workspace> <port>` |
 | Server fingerprint / host key changed | `devmachine machines trust [name]` |
 | Where is my config / what's in it | `devmachine config path` / `devmachine config show` |
