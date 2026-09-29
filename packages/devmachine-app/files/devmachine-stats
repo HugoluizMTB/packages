@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""devmachine-stats: one machine's health, as one JSON document.
+
+Usage:
+    devmachine-stats
+
+Reads memory, swap, disk, load, Docker containers, RAM by Linux user, and
+listening ports with their owner — the same facts the Devmachine macOS app
+used to read by shipping a shell snippet over SSH. This script runs the
+snippet's own commands (`free`, `df`, `/proc/loadavg`, `docker`, `ps`, `ss`)
+on the machine itself and returns one structured document, so the app parses
+JSON instead of a shell transcript.
+
+Deterministic and LLM-free. A missing tool (Docker not installed, no
+listeners) is not a failure: the matching field comes back empty and a note
+goes on "errors". The command only fails (non-zero exit, one JSON error
+document) when it cannot report anything at all.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+# Hostinger's own home-folder convention, and Devmachine's: a workspace's
+# processes and containers live under here, so the folder names the owner.
+HOME_PREFIX = "/home/"
+
+
+def run(cmd: list, timeout: int = 10):
+    """Run a command, return (ok, stdout, error). Never raises."""
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if p.returncode != 0:
+            return False, "", (p.stderr.strip() or "%s: exit %d" % (cmd[0], p.returncode))
+        return True, p.stdout, None
+    except FileNotFoundError:
+        return False, "", None
+    except subprocess.TimeoutExpired:
+        return False, "", "%s: timed out" % cmd[0]
+    except OSError as e:
+        return False, "", "%s: %s" % (cmd[0], e)
+
+
+def owner_from_home(path: str) -> str | None:
+    if not path.startswith(HOME_PREFIX):
+        return None
+    rest = path[len(HOME_PREFIX):]
+    name = rest.split("/", 1)[0]
+    return name or None
+
+
+# ── memory, swap ─────────────────────────────────────────────────────────
+
+def read_memory_and_swap(errors: list):
+    ok, out, err = run(["free", "-b"])
+    memory = {"total_bytes": 0, "used_bytes": 0, "available_bytes": 0}
+    swap = {"total_bytes": 0, "used_bytes": 0}
+    if err:
+        errors.append("free: %s" % err)
+        return memory, swap
+    if not ok:
+        errors.append("free: not found")
+        return memory, swap
+
+    for line in out.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        if fields[0] == "Mem:" and len(fields) >= 7:
+            memory = {
+                "total_bytes": int(fields[1]),
+                "used_bytes": int(fields[2]),
+                "available_bytes": int(fields[6]),
+            }
+        elif fields[0] == "Swap:" and len(fields) >= 3:
+            swap = {"total_bytes": int(fields[1]), "used_bytes": int(fields[2])}
+    return memory, swap
+
+
+# ── disk ─────────────────────────────────────────────────────────────────
+
+def read_disk(errors: list):
+    disk = {"path": "/", "used_bytes": 0, "available_bytes": 0, "used_percent": 0}
+    ok, out, err = run(["df", "-B1", "--output=used,avail,pcent", "/"])
+    if err:
+        errors.append("df: %s" % err)
+        return disk
+    if not ok:
+        errors.append("df: not found")
+        return disk
+
+    lines = [l for l in out.splitlines() if l.strip()]
+    if len(lines) < 2:
+        errors.append("df: unexpected output")
+        return disk
+    fields = lines[-1].split()
+    if len(fields) < 3:
+        errors.append("df: unexpected output")
+        return disk
+    disk["used_bytes"] = int(fields[0])
+    disk["available_bytes"] = int(fields[1])
+    disk["used_percent"] = int(fields[2].rstrip("%"))
+    return disk
+
+
+# ── load ─────────────────────────────────────────────────────────────────
+
+def read_load(errors: list):
+    load = {"load1": 0.0, "load5": 0.0, "load15": 0.0}
+    try:
+        fields = open("/proc/loadavg", encoding="utf-8").read().split()
+    except OSError as e:
+        errors.append("/proc/loadavg: %s" % e)
+        return load
+    if len(fields) < 3:
+        errors.append("/proc/loadavg: unexpected content")
+        return load
+    load = {"load1": float(fields[0]), "load5": float(fields[1]), "load15": float(fields[2])}
+    return load
+
+
+# ── docker ───────────────────────────────────────────────────────────────
+
+# Longest suffix first: "MiB" ends with "B" too, and checking "B" first would
+# strip only the "B" off "MiB" and leave "Mi" for float() to reject.
+UNIT_MULTIPLIER = [("KiB", 1024), ("MiB", 1024**2), ("GiB", 1024**3), ("TiB", 1024**4), ("B", 1)]
+
+
+def parse_size(text: str) -> int:
+    """"12.34MiB" -> bytes. An amount `docker stats` cannot parse gives 0
+    rather than raising: a partial reading beats a failed command."""
+    text = text.strip()
+    for unit, multiplier in UNIT_MULTIPLIER:
+        if text.endswith(unit):
+            try:
+                return int(float(text[: -len(unit)]) * multiplier)
+            except ValueError:
+                return 0
+    return 0
+
+
+def container_owners(errors: list) -> dict:
+    """Name -> owning user, from the folder Compose or the Supabase CLI
+    started the container from. A container with neither label has no
+    owner, and is shown to everyone rather than guessed at."""
+    fmt = '{{.Names}}|{{.Label "com.docker.compose.project.working_dir"}}{{.Label "com.supabase.cli.workdir"}}'
+    ok, out, err = run(["docker", "ps", "--format", fmt])
+    if err:
+        errors.append("docker ps: %s" % err)
+        return {}
+    if not ok:
+        return {}
+    owners = {}
+    for line in out.splitlines():
+        parts = line.split("|", 1)
+        if len(parts) != 2:
+            continue
+        name, workdir = parts[0].strip(), parts[1].strip()
+        owner = owner_from_home(workdir)
+        if name and owner:
+            owners[name] = owner
+    return owners
+
+
+def read_docker(errors: list):
+    docker = {"available": False, "containers": []}
+    ok, out, err = run(["docker", "stats", "--no-stream", "--format", "{{.Name}}|{{.MemUsage}}|{{.CPUPerc}}"])
+    if err:
+        errors.append("docker stats: %s" % err)
+        return docker
+    if not ok:
+        return docker
+
+    docker["available"] = True
+    owners = container_owners(errors)
+    for line in out.splitlines():
+        parts = line.split("|")
+        if len(parts) != 3:
+            continue
+        name = parts[0].strip()
+        mem_used, _, mem_limit = parts[1].partition("/")
+        docker["containers"].append({
+            "name": name,
+            "mem_used_bytes": parse_size(mem_used),
+            "mem_limit_bytes": parse_size(mem_limit),
+            "cpu_percent": float(parts[2].strip().rstrip("%") or 0),
+            "owner": owners.get(name),
+        })
+    return docker
+
+
+# ── ram by user ──────────────────────────────────────────────────────────
+
+def read_users(errors: list):
+    ok, out, err = run(["ps", "-eo", "user=,rss="])
+    if err:
+        errors.append("ps: %s" % err)
+        return []
+    if not ok:
+        errors.append("ps: not found")
+        return []
+
+    totals: dict = {}
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        user, rss_kb = fields[0], fields[1]
+        try:
+            totals[user] = totals.get(user, 0) + int(rss_kb) * 1024
+        except ValueError:
+            continue
+    users = [{"user": user, "rss_bytes": rss} for user, rss in totals.items()]
+    users.sort(key=lambda u: u["rss_bytes"], reverse=True)
+    return users
+
+
+# ── ports ────────────────────────────────────────────────────────────────
+
+def published_ports(column: str):
+    """The host ports of a `{{.Ports}}` column: `0.0.0.0:8810->80/tcp,
+    [::]:8810->80/tcp` and a range, `9000-9001->9000-9001/tcp`, one mapping
+    for both ends."""
+    ports = set()
+    for mapping in column.split(","):
+        if "->" not in mapping:
+            continue
+        left = mapping.split("->", 1)[0]
+        if ":" not in left:
+            continue
+        value = left.rsplit(":", 1)[1].strip()
+        bounds = value.split("-")
+        try:
+            bounds = [int(b) for b in bounds]
+        except ValueError:
+            continue
+        if len(bounds) == 1:
+            ports.add(bounds[0])
+        elif len(bounds) == 2 and bounds[0] <= bounds[1]:
+            ports.update(range(bounds[0], bounds[1] + 1))
+    return ports
+
+
+def listening_port(line: str):
+    columns = line.split()
+    if len(columns) < 4 or ":" not in columns[3]:
+        return None
+    try:
+        return int(columns[3].rsplit(":", 1)[1])
+    except ValueError:
+        return None
+
+
+def first_pid(line: str):
+    marker = "pid="
+    idx = line.find(marker)
+    if idx == -1:
+        return None
+    digits = ""
+    for ch in line[idx + len(marker):]:
+        if not ch.isdigit():
+            break
+        digits += ch
+    return int(digits) if digits else None
+
+
+def read_ports(errors: list):
+    """Container owner wins over the process holding the port: what listens
+    for a published port is Docker's own proxy, which belongs to root and
+    would hide nothing."""
+    ok, out, err = run(["docker", "ps", "--format", '{{.Names}}|{{.Label "com.docker.compose.project.working_dir"}}{{.Label "com.supabase.cli.workdir"}}|{{.Ports}}'])
+    container_ports = []
+    if ok:
+        for line in out.splitlines():
+            parts = line.split("|", 2)
+            if len(parts) != 3:
+                continue
+            owner = owner_from_home(parts[1].strip())
+            if not owner:
+                continue
+            ports = published_ports(parts[2])
+            if ports:
+                container_ports.append((ports, owner))
+    elif err:
+        errors.append("docker ps: %s" % err)
+
+    ok, out, err = run(["ps", "-eo", "pid=,user="])
+    user_of_pid = {}
+    if err:
+        errors.append("ps: %s" % err)
+    elif ok:
+        for line in out.splitlines():
+            fields = line.split()
+            if len(fields) < 2:
+                continue
+            try:
+                user_of_pid[int(fields[0])] = fields[1]
+            except ValueError:
+                continue
+
+    ok, out, err = run(["ss", "-lntpH"])
+    if err:
+        errors.append("ss: %s" % err)
+        return []
+    if not ok:
+        errors.append("ss: not found")
+        return []
+
+    owners: dict = {}
+    for line in out.splitlines():
+        port = listening_port(line)
+        if port is None:
+            continue
+        pid = first_pid(line)
+        user = user_of_pid.get(pid) if pid is not None else None
+        if port not in owners:
+            owners[port] = user
+
+    for ports, owner in container_ports:
+        for port in ports:
+            owners[port] = owner
+
+    return [{"port": port, "owner": owners[port]} for port in sorted(owners)]
+
+
+# ── main ─────────────────────────────────────────────────────────────────
+
+def collect() -> dict:
+    errors: list = []
+    memory, swap = read_memory_and_swap(errors)
+    return {
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+        "memory": memory,
+        "swap": swap,
+        "disk": read_disk(errors),
+        "load": read_load(errors),
+        "docker": read_docker(errors),
+        "users": read_users(errors),
+        "ports": read_ports(errors),
+        "errors": errors,
+    }
+
+
+def main():
+    print(json.dumps(collect(), ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

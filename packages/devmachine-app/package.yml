@@ -16,4 +16,4 @@ variables:
     default: []
 
 entrypoint: bin/devmachine-app
-commands: [context]
+commands: [context, stats, caddy-logs]

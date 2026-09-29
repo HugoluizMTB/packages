@@ -26,9 +26,73 @@ devmachine sync
 
 ## Notes
 
-- Its entrypoint (`bin/devmachine-app`) only accepts the `context` command,
-  called by the macOS app itself — `devmachine run --package devmachine-app
-  --workspace acme -- context`.
+- Its entrypoint (`bin/devmachine-app`) accepts three commands, called by the
+  macOS app itself: `context`, `stats`, and `caddy-logs` — for example
+  `devmachine run --package devmachine-app --workspace acme -- context`.
+- `stats` and `caddy-logs` run as the machine admin (the package's entrypoint
+  is reached that way), so they can read every workspace's processes and
+  containers, not only one.
+
+### `stats`
+
+`devmachine run --package devmachine-app -- stats` prints one JSON document
+with the machine's health: memory, swap, disk, load, Docker containers, RAM
+by Linux user, and listening ports with their owner. It replaces a shell
+snippet the app used to send over SSH and parse itself.
+
+A part the machine cannot answer — Docker not installed, nothing listening —
+comes back as an empty list rather than a failure. The command only exits
+non-zero when it cannot report anything at all. Partial problems are
+described in `errors`, a list of short strings.
+
+```json
+{
+  "collected_at": "2026-09-29T16:23:11+00:00",
+  "memory": {"total_bytes": 8589934592, "used_bytes": 4294967296, "available_bytes": 4160749568},
+  "swap": {"total_bytes": 2147483648, "used_bytes": 104857600},
+  "disk": {"path": "/", "used_bytes": 1073741824, "available_bytes": 8589934592, "used_percent": 11},
+  "load": {"load1": 0.52, "load5": 0.58, "load15": 0.59},
+  "docker": {
+    "available": true,
+    "containers": [
+      {"name": "web", "mem_used_bytes": 12897075, "mem_limit_bytes": 2086027264, "cpu_percent": 1.5, "owner": "alice"}
+    ]
+  },
+  "users": [
+    {"user": "alice", "rss_bytes": 314572800}
+  ],
+  "ports": [
+    {"port": 8810, "owner": "alice"},
+    {"port": 22, "owner": "root"}
+  ],
+  "errors": []
+}
+```
+
+Field notes:
+
+- Every `*_bytes` field and `rss_bytes` is an integer count of bytes.
+  `cpu_percent`, `load1`, `load5`, `load15` are floats.
+- `docker.available` is `false` when Docker is not installed or not running;
+  `docker.containers` is then `[]`, never missing.
+- A container's `owner` is the Linux user its folder belongs to — read from
+  the Compose or Supabase CLI working-directory label — or `null` when the
+  container carries neither label.
+- `users` sums RSS per Linux user across every process, sorted by
+  `rss_bytes` descending.
+- A port's `owner` is the user of the container publishing it, or otherwise
+  the user of the process holding it, or `null` when neither is known.
+- `errors` lists a short message per command that failed outright (a
+  non-zero exit, a timeout); a tool that is simply not installed is not an
+  error.
+
+### `caddy-logs`
+
+`devmachine run --package devmachine-app -- caddy-logs --lines 200` prints
+the tail of Caddy's own journal (`journalctl -u caddy -n <lines> --no-pager`)
+as plain text on stdout — a log is read, not parsed, so this is not JSON.
+`--lines` defaults to 200. A failure (no `caddy` unit, `journalctl` missing)
+is reported on stderr with a non-zero exit.
 
 ## Learn more
 

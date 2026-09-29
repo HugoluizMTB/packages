@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""devmachine-caddy-logs: the tail of Caddy's own journal.
+
+Usage:
+    devmachine-caddy-logs [--lines N]
+
+Runs `journalctl -u caddy -n N --no-pager` on the machine and prints its
+output verbatim — the same read the Devmachine macOS app used to send as raw
+shell over SSH. Prints plain text, not JSON: a log is read, not parsed.
+"""
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--lines", type=int, default=200, help="how many lines to print (default 200)")
+    args = ap.parse_args()
+
+    if args.lines <= 0:
+        ap.error("--lines must be a positive number")
+
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", "caddy", "-n", str(args.lines), "--no-pager"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        print("journalctl: not found", file=sys.stderr)
+        return 1
+    except subprocess.TimeoutExpired:
+        print("journalctl: timed out", file=sys.stderr)
+        return 1
+
+    if result.returncode != 0:
+        print(result.stderr.strip() or "journalctl: exit %d" % result.returncode, file=sys.stderr)
+        return 1
+
+    sys.stdout.write(result.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

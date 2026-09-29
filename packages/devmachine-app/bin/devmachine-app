@@ -3,7 +3,11 @@
 import os
 import sys
 
-COMMANDS = {"context": "devmachine-infer"}
+COMMANDS = {
+    "context": "devmachine-infer",
+    "stats": "devmachine-stats",
+    "caddy-logs": "devmachine-caddy-logs",
+}
 
 
 def main(argv):
