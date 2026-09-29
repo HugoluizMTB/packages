@@ -1044,3 +1044,451 @@ def test_a_configured_host_with_no_proxy_gets_gh_host_and_no_proxy(monkeypatch, 
     env = m.gh_env("github.example.com")
     assert env["GH_HOST"] == "github.example.com"
     assert "HTTPS_PROXY" not in env
+
+
+def _codex_session_meta(cwd):
+    return {"timestamp": "2026-01-01T00:00:00.000Z", "ordinal": 0, "type": "session_meta",
+            "payload": {"session_id": "s1", "cwd": cwd, "originator": "codex-tui"}}
+
+
+def _codex_message(role, text, item_type="input_text"):
+    return {"timestamp": "2026-01-01T00:00:01.000Z", "type": "response_item",
+            "payload": {"type": "message", "role": role,
+                        "content": [{"type": item_type, "text": text}]}}
+
+
+def _codex_exec(command, output=""):
+    return [
+        {"timestamp": "2026-01-01T00:00:02.000Z", "type": "response_item",
+         "payload": {"type": "custom_tool_call", "call_id": "call_1", "name": "exec",
+                     "input": command}},
+        {"timestamp": "2026-01-01T00:00:03.000Z", "type": "response_item",
+         "payload": {"type": "custom_tool_call_output", "call_id": "call_1",
+                     "output": [{"type": "input_text", "text": output}]}},
+    ]
+
+
+def test_codex_session_cwd_reads_the_first_line(tmp_path):
+    import devmachine_infer as m
+
+    f = tmp_path / "rollout-1.jsonl"
+    f.write_text(json.dumps(_codex_session_meta("/home/alice/dev/dash")) + "\n"
+                 + json.dumps(_codex_message("user", "hello")) + "\n")
+    assert m._codex_session_cwd(f) == "/home/alice/dev/dash"
+
+
+def test_codex_session_cwd_survives_a_malformed_first_line(tmp_path):
+    import devmachine_infer as m
+
+    f = tmp_path / "rollout-2.jsonl"
+    f.write_text("not json\n")
+    assert m._codex_session_cwd(f) is None
+
+
+def test_recent_codex_transcripts_matches_by_cwd(monkeypatch, tmp_path):
+    import devmachine_infer as m
+    import os
+
+    sessions = tmp_path / "codex-sessions"
+    day = sessions / "2026" / "01" / "01"
+    day.mkdir(parents=True)
+    repo = tmp_path / "dash"
+    repo.mkdir()
+
+    matching = day / "rollout-2026-01-01T00-00-00-abc.jsonl"
+    matching.write_text(json.dumps(_codex_session_meta(str(repo.resolve()))) + "\n")
+    other = day / "rollout-2026-01-01T01-00-00-def.jsonl"
+    other.write_text(json.dumps(_codex_session_meta("/home/bob/dev/other")) + "\n")
+    os.utime(matching, (100, 100))
+    os.utime(other, (200, 200))
+
+    monkeypatch.setattr(m, "CODEX_SESSIONS_DIR", sessions)
+    assert m.recent_codex_transcripts(repo) == [matching]
+    assert m.find_codex_transcript(repo) == matching
+
+
+def test_pi_project_slug_wraps_the_path_in_separators():
+    import devmachine_infer as m
+
+    assert m.pi_project_slug(Path("/Users/alice/dev/dash")) == "--Users-alice-dev-dash--"
+
+
+def test_recent_pi_transcripts_reads_the_slug_directory(monkeypatch, tmp_path):
+    import devmachine_infer as m
+    import os
+
+    sessions = tmp_path / "pi-sessions"
+    repo = tmp_path / "dash"
+    repo.mkdir()
+    slug_dir = sessions / m.pi_project_slug(repo)
+    slug_dir.mkdir(parents=True)
+
+    older = slug_dir / "2026-01-01T00-00-00-000Z_a.jsonl"
+    newer = slug_dir / "2026-01-01T01-00-00-000Z_b.jsonl"
+    older.write_text("{}\n")
+    newer.write_text("{}\n")
+    os.utime(older, (100, 100))
+    os.utime(newer, (200, 200))
+
+    monkeypatch.setattr(m, "PI_SESSIONS_DIR", sessions)
+    assert m.recent_pi_transcripts(repo)[0] == newer
+    assert m.find_pi_transcript(repo) == newer
+
+
+def test_extract_refs_codex_reads_message_text_and_exec_output():
+    import devmachine_infer as m
+
+    events = [
+        _codex_session_meta("/home/alice/dev/dash"),
+        _codex_message("user", "see https://github.com/acme/dash/pull/9"),
+    ] + _codex_exec("gh pr view 12 -R acme/other",
+                    "https://linear.app/acme/issue/LIN-3 opened")
+
+    refs = m.extract_refs(events, "acme/dash", "codex")
+    assert list(refs["github"]) == ["acme/dash#9", "acme/other#12"]
+    assert any("LIN-3" in u for u in refs["links"])
+
+
+def test_codex_todos_reads_the_last_update_plan_call():
+    import devmachine_infer as m
+
+    events = [
+        {"type": "response_item", "payload": {"type": "function_call", "name": "update_plan",
+         "arguments": json.dumps({"plan": [{"step": "old", "status": "completed"}]})}},
+        {"type": "response_item", "payload": {"type": "function_call", "name": "update_plan",
+         "arguments": json.dumps({"plan": [
+             {"step": "write tests", "status": "completed"},
+             {"step": "ship it", "status": "in_progress"}]})}},
+    ]
+    todos = m.codex_todos(events)
+    assert [t["text"] for t in todos] == ["write tests", "ship it"]
+    assert [t["state"] for t in todos] == ["done", "active"]
+
+
+def test_codex_todos_empty_when_no_plan_tool_used():
+    import devmachine_infer as m
+
+    assert m.codex_todos([_codex_message("assistant", "no plan here")]) == []
+
+
+def _codex_item(payload, ts="2026-01-01T00:00:05.000Z"):
+    return {"timestamp": ts, "type": "response_item", "payload": payload}
+
+
+def _codex_spawn(call_id, task_name):
+    return [
+        _codex_item({"type": "function_call", "name": "spawn_agent", "call_id": call_id,
+                     "arguments": json.dumps({"task_name": task_name, "message": "go"})}),
+        _codex_item({"type": "function_call_output", "call_id": call_id,
+                     "output": json.dumps({"task_name": f"/root/{task_name}"})}),
+    ]
+
+
+def test_extract_background_codex_agent_runs_after_spawn_answers():
+    import devmachine_infer as m
+
+    bg = m.extract_background(_codex_spawn("call_9", "audit_release"), "codex")
+    assert bg["agents"] == [{"label": "audit_release", "status": "running"}]
+    assert bg["monitors"] == [] and bg["shells"] == []
+
+
+def test_extract_background_codex_agent_done_with_final_answer():
+    import devmachine_infer as m
+
+    events = _codex_spawn("call_9", "audit_release") + [
+        _codex_item({"type": "agent_message", "author": "/root/audit_release",
+                     "recipient": "/root",
+                     "content": [{"type": "input_text",
+                                  "text": "Message Type: FINAL_ANSWER\nPayload:\ndone"}]})]
+    assert m.extract_background(events, "codex")["agents"] == []
+
+
+def test_extract_background_codex_agent_done_when_interrupted():
+    import devmachine_infer as m
+
+    events = _codex_spawn("call_9", "audit_release") + [
+        _codex_item({"type": "function_call", "name": "interrupt_agent", "call_id": "call_10",
+                     "arguments": json.dumps({"target": "/root/audit_release"})})]
+    assert m.extract_background(events, "codex")["agents"] == []
+
+
+def test_extract_background_codex_agent_done_when_list_agents_says_so():
+    import devmachine_infer as m
+
+    events = _codex_spawn("call_9", "audit_release") + [
+        _codex_item({"type": "function_call", "name": "list_agents", "call_id": "call_11",
+                     "arguments": "{}"}),
+        _codex_item({"type": "function_call_output", "call_id": "call_11",
+                     "output": json.dumps({"agents": [{"agent_name": "/root/audit_release",
+                                                       "agent_status": "interrupted"}]})})]
+    assert m.extract_background(events, "codex")["agents"] == []
+
+
+def test_extract_background_codex_survives_arguments_that_are_not_an_object():
+    import devmachine_infer as m
+
+    events = [_codex_item({"type": "function_call", "name": "spawn_agent", "call_id": "call_1",
+                           "arguments": "[1]"})]
+    assert m.extract_background(events, "codex")["agents"] == [
+        {"label": "call_1", "status": "running"}]
+
+
+def test_extract_refs_codex_reads_tool_output_given_as_a_string():
+    import devmachine_infer as m
+
+    events = [_codex_item({"type": "custom_tool_call_output", "call_id": "call_1",
+                           "output": "opened https://github.com/acme/dash/pull/8"})]
+    assert list(m.extract_refs(events, None, "codex")["github"]) == ["acme/dash#8"]
+
+
+def test_codex_session_cwd_ignores_a_first_line_that_is_not_an_object(tmp_path):
+    import devmachine_infer as m
+
+    f = tmp_path / "rollout-3.jsonl"
+    f.write_text("[1]\n")
+    assert m._codex_session_cwd(f) is None
+
+
+def test_iter_events_skips_lines_that_are_not_objects(tmp_path):
+    import devmachine_infer as m
+
+    f = tmp_path / "t.jsonl"
+    f.write_text('[1]\n"text"\n{"type": "message"}\n')
+    assert list(m.iter_events(f)) == [{"type": "message"}]
+
+
+def test_recent_codex_transcripts_skips_stale_matches_when_fresh_ones_exist(monkeypatch, tmp_path):
+    import devmachine_infer as m
+    import os
+    import time as _time
+
+    sessions = tmp_path / "codex-sessions"
+    day = sessions / "2026" / "01" / "01"
+    day.mkdir(parents=True)
+    repo = tmp_path / "dash"
+    repo.mkdir()
+    now = _time.time()
+
+    fresh = day / "rollout-fresh.jsonl"
+    stale = day / "rollout-stale.jsonl"
+    for f in (fresh, stale):
+        f.write_text(json.dumps(_codex_session_meta(str(repo.resolve()))) + "\n")
+    os.utime(fresh, (now - 10, now - 10))
+    os.utime(stale, (now - 60 * 3600, now - 60 * 3600))
+
+    monkeypatch.setattr(m, "CODEX_SESSIONS_DIR", sessions)
+    assert m.recent_codex_transcripts(repo) == [fresh]
+
+
+def _pi_session(cwd):
+    return {"type": "session", "version": 3, "id": "s1", "timestamp": "2026-01-01T00:00:00.000Z",
+            "cwd": cwd}
+
+
+def _pi_message(role, blocks):
+    return {"type": "message", "id": "m1", "parentId": None,
+            "timestamp": "2026-01-01T00:00:01.000Z",
+            "message": {"role": role, "content": blocks}}
+
+
+def test_extract_refs_pi_reads_text_and_tool_call_arguments():
+    import devmachine_infer as m
+
+    events = [
+        _pi_session("/home/alice/dev/dash"),
+        _pi_message("user", [{"type": "text", "text": "check https://github.com/acme/dash/pull/4"}]),
+        _pi_message("assistant", [{"type": "toolCall", "id": "t1", "name": "bash",
+                                   "arguments": {"command": "gh pr view 21 -R acme/other"}}]),
+        _pi_message("toolResult", [{"type": "text", "text": "seen at https://linear.app/acme/issue/LIN-7"}]),
+    ]
+    refs = m.extract_refs(events, "acme/dash", "pi")
+    assert list(refs["github"]) == ["acme/dash#4", "acme/other#21"]
+    assert any("LIN-7" in u for u in refs["links"])
+
+
+def test_pi_todos_reads_the_last_todo_write_call():
+    import devmachine_infer as m
+
+    events = [
+        _pi_message("assistant", [{"type": "toolCall", "id": "t1", "name": "todo_write",
+                                   "arguments": {"todos": [{"content": "a", "status": "pending"}]}}]),
+        _pi_message("assistant", [{"type": "toolCall", "id": "t2", "name": "todo_write",
+                                   "arguments": {"todos": [
+                                       {"content": "a", "status": "completed"},
+                                       {"content": "b", "status": "in_progress"}]}}]),
+    ]
+    todos = m.pi_todos(events)
+    assert [t["text"] for t in todos] == ["a", "b"]
+    assert [t["state"] for t in todos] == ["done", "active"]
+
+
+def test_pi_todos_reads_arguments_given_as_a_json_string():
+    import devmachine_infer as m
+
+    events = [_pi_message("assistant", [{"type": "toolCall", "id": "t1", "name": "todo_write",
+                                         "arguments": json.dumps({"todos": [
+                                             {"content": "a", "status": "pending"}]})}])]
+    assert m.pi_todos(events) == [{"text": "a", "state": "pending"}]
+
+
+def test_pi_todos_survives_arguments_that_are_not_an_object():
+    import devmachine_infer as m
+
+    events = [_pi_message("assistant", [{"type": "toolCall", "id": "t1", "name": "todo_write",
+                                         "arguments": "not json"}])]
+    assert m.pi_todos(events) == []
+
+
+def test_pi_todos_empty_when_no_todo_tool_used():
+    import devmachine_infer as m
+
+    events = [_pi_message("assistant", [{"type": "toolCall", "id": "t1", "name": "bash",
+                                         "arguments": {"command": "ls"}}])]
+    assert m.pi_todos(events) == []
+
+
+def test_extract_background_pi_is_always_empty():
+    import devmachine_infer as m
+
+    events = [_pi_message("assistant", [{"type": "toolCall", "id": "t1", "name": "subagent",
+                                         "arguments": {"action": "call", "agent": "scout"}}])]
+    assert m.extract_background(events, "pi") == {"monitors": [], "shells": [], "agents": []}
+
+
+def test_detect_harness_uses_the_tmux_pane_command(monkeypatch):
+    import devmachine_infer as m
+
+    monkeypatch.setattr(m, "run", lambda cmd, **kw: (True, "codex\n"))
+    assert m.detect_harness("sess", Path("/home/alice/dev/dash")) == "codex"
+
+
+def _fake_tmux(pane, ps_table):
+    def fake_run(cmd, **kw):
+        if cmd[0] == "tmux":
+            return True, pane
+        return True, ps_table
+    return fake_run
+
+
+def test_pane_harness_reads_a_version_named_binary_as_claude(monkeypatch):
+    import devmachine_infer as m
+
+    monkeypatch.setattr(m, "run", _fake_tmux("2.1.300\t100", ""))
+    assert m.pane_harness("sess") == "claude"
+
+
+def test_pane_harness_finds_a_node_harness_under_the_pane(monkeypatch):
+    import devmachine_infer as m
+
+    table = ("  100     1 -zsh\n"
+             "  200   100 node /opt/node/lib/node_modules/@openai/codex/bin/codex.js\n"
+             "  300   200 /opt/codex/bin/codex\n")
+    monkeypatch.setattr(m, "run", _fake_tmux("node\t100", table))
+    assert m.pane_harness("sess") == "codex"
+
+
+def test_pane_harness_finds_pi_run_as_the_pane_process(monkeypatch):
+    import devmachine_infer as m
+
+    table = "  100     1 node /opt/node/lib/node_modules/pi-coding-agent/dist/cli.js\n"
+    monkeypatch.setattr(m, "run", _fake_tmux("node\t100", table))
+    assert m.pane_harness("sess") == "pi"
+
+
+def test_pane_harness_ignores_a_pane_with_no_harness(monkeypatch):
+    import devmachine_infer as m
+
+    table = "  100     1 -zsh\n  200   100 vim notes.txt\n"
+    monkeypatch.setattr(m, "run", _fake_tmux("vim\t100", table))
+    assert m.pane_harness("sess") is None
+
+
+def test_detect_harness_falls_back_to_most_recent_transcript(monkeypatch, tmp_path):
+    import devmachine_infer as m
+    import os
+
+    monkeypatch.setattr(m, "run", lambda cmd, **kw: (False, ""))
+
+    claude_tx = tmp_path / "claude.jsonl"
+    codex_tx = tmp_path / "codex.jsonl"
+    pi_tx = tmp_path / "pi.jsonl"
+    for f in (claude_tx, codex_tx, pi_tx):
+        f.write_text("{}\n")
+    os.utime(claude_tx, (100, 100))
+    os.utime(pi_tx, (200, 200))
+    os.utime(codex_tx, (300, 300))
+
+    monkeypatch.setattr(m, "find_transcript", lambda mode, project: claude_tx)
+    monkeypatch.setattr(m, "find_codex_transcript", lambda project: codex_tx)
+    monkeypatch.setattr(m, "find_pi_transcript", lambda project: pi_tx)
+
+    assert m.detect_harness(None, tmp_path) == "codex"
+
+
+def test_detect_harness_defaults_to_claude_with_no_transcripts(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    monkeypatch.setattr(m, "run", lambda cmd, **kw: (False, ""))
+    monkeypatch.setattr(m, "find_transcript", lambda mode, project: None)
+    monkeypatch.setattr(m, "find_codex_transcript", lambda project: None)
+    monkeypatch.setattr(m, "find_pi_transcript", lambda project: None)
+
+    assert m.detect_harness("sess", tmp_path) == "claude"
+
+
+def test_build_context_reports_codex_harness(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    transcript = tmp_path / "rollout.jsonl"
+    events = [
+        _codex_session_meta(str(tmp_path)),
+        _codex_message("user", "see https://github.com/acme/dash/pull/3"),
+    ]
+    transcript.write_text("".join(json.dumps(e) + "\n" for e in events))
+
+    monkeypatch.setattr(m, "cwd_for_session", lambda session: str(tmp_path))
+    monkeypatch.setattr(m, "detect_harness", lambda session, project: "codex")
+    monkeypatch.setattr(m, "recent_codex_transcripts", lambda project: [transcript])
+    monkeypatch.setattr(m, "default_repo_of", lambda project: None)
+
+    ctx = m.build_context("sess", None, resolve=False)
+    assert ctx["harness"] == "codex"
+    assert ctx["isClaude"] is False
+    assert ctx["prs"][0]["repo"] == "acme/dash"
+
+
+def test_build_context_reports_pi_harness(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    transcript = tmp_path / "session.jsonl"
+    events = [
+        _pi_session(str(tmp_path)),
+        _pi_message("user", [{"type": "text", "text": "see https://github.com/acme/dash/pull/3"}]),
+    ]
+    transcript.write_text("".join(json.dumps(e) + "\n" for e in events))
+
+    monkeypatch.setattr(m, "cwd_for_session", lambda session: str(tmp_path))
+    monkeypatch.setattr(m, "detect_harness", lambda session, project: "pi")
+    monkeypatch.setattr(m, "recent_pi_transcripts", lambda project: [transcript])
+    monkeypatch.setattr(m, "default_repo_of", lambda project: None)
+
+    ctx = m.build_context("sess", None, resolve=False)
+    assert ctx["harness"] == "pi"
+    assert ctx["isClaude"] is False
+    assert ctx["prs"][0]["repo"] == "acme/dash"
+
+
+def test_build_context_reports_claude_harness(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"message": {"content": [{"type": "text", "text": "hi"}]}}\n')
+
+    monkeypatch.setattr(m, "cwd_for_session", lambda session: str(tmp_path))
+    monkeypatch.setattr(m, "detect_harness", lambda session, project: "claude")
+    monkeypatch.setattr(m, "find_transcript", lambda session, project: transcript)
+    monkeypatch.setattr(m, "default_repo_of", lambda project: None)
+
+    ctx = m.build_context("sess", None, resolve=False)
+    assert ctx["harness"] == "claude"
+    assert ctx["isClaude"] is True

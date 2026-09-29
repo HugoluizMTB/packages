@@ -27,6 +27,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
+CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
+PI_SESSIONS_DIR = Path.home() / ".pi" / "agent" / "sessions"
+
+HARNESSES = ("claude", "codex", "pi")
 
 CONFIG_PATH_LINUX = Path("/etc/devmachine-app/config.json")
 CONFIG_PATH_MACOS = Path.home() / ".config" / "devmachine-app" / "config.json"
@@ -81,6 +85,10 @@ GH_CMD_REPO_RE = re.compile(r"(?:-R|--repo)[=\s]+([\w.-]+/[\w.-]+)")
 NOISE_EXT = (".svg", ".png", ".ico", ".gif", ".css", ".js", ".woff", ".woff2")
 NOISE_HOST_PREFIX = ("static.", "cdn.", "assets.")
 TASK_DONE_RE = re.compile(r"<task-id>([^<]+)</task-id>")
+# Claude's native binary is installed under its version number, so tmux names
+# the pane's command `2.1.284` rather than `claude`.
+VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+CODEX_DONE_MARK = "Message Type: FINAL_ANSWER"
 
 
 def run(cmd, env=None, timeout=30):
@@ -148,14 +156,87 @@ def project_dirs(slug: str):
             yield d
 
 
+def _codex_session_cwd(path: Path) -> str | None:
+    """The `cwd` a Codex rollout recorded for itself, read from its first line.
+
+    Codex, unlike Claude, does not sort its transcripts into a per-project
+    directory — every rollout lives under `sessions/YYYY/MM/DD/`, and the
+    project it belongs to is only known from the `session_meta` event each
+    rollout opens with.
+    """
+    try:
+        with open(path, errors="replace") as fh:
+            first = fh.readline()
+        d = json.loads(first)
+    except (OSError, json.JSONDecodeError):
+        return None
+    payload = d.get("payload") if isinstance(d, dict) else None
+    cwd = payload.get("cwd") if isinstance(payload, dict) else None
+    return cwd if isinstance(cwd, str) else None
+
+
+def recent_codex_transcripts(project: Path, limit: int = 4, max_age_h: float = 12) -> list[Path]:
+    """Same answer as `recent_transcripts`, found newest first so that only a
+    handful of first lines are read: the panel polls every 5s, and reading
+    every rollout Codex ever wrote grows with the history, not the project.
+    """
+    target = str(project.resolve())
+    floor = time.time() - max_age_h * 3600
+    dated = sorted(((f.stat().st_mtime, f)
+                    for f in CODEX_SESSIONS_DIR.glob("*/*/*/rollout-*.jsonl")), reverse=True)
+    found: list[Path] = []
+    for mtime, f in dated:
+        if mtime < floor and found:
+            break
+        if _codex_session_cwd(f) != target:
+            continue
+        found.append(f)
+        if mtime < floor or len(found) >= limit:
+            break
+    return found
+
+
+def find_codex_transcript(project: Path) -> Path | None:
+    files = recent_codex_transcripts(project, limit=1)
+    return files[0] if files else None
+
+
+def pi_project_slug(path: Path) -> str:
+    """Pi's session directory name for a project's cwd.
+
+    Pi wraps the resolved path in a leading and trailing `/` before turning
+    every `/` into `-`, so the wrapper separators and the path's own become
+    indistinguishable — `/Users/a/b` slugifies to `--Users-a-b--`, not
+    `-Users-a-b-`.
+    """
+    resolved = str(path.resolve())
+    return "-" + (resolved + "/").replace("/", "-") + "-"
+
+
+def recent_pi_transcripts(project: Path, limit: int = 4, max_age_h: float = 12) -> list[Path]:
+    d = PI_SESSIONS_DIR / pi_project_slug(project)
+    files = list(d.glob("*.jsonl")) if d.is_dir() else []
+    files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    floor = time.time() - max_age_h * 3600
+    fresh = [f for f in files if f.stat().st_mtime >= floor]
+    return (fresh or files[:1])[:limit]
+
+
+def find_pi_transcript(project: Path) -> Path | None:
+    files = recent_pi_transcripts(project, limit=1)
+    return files[0] if files else None
+
+
 def iter_events(path: Path):
     """Yield parsed transcript lines; skip malformed ones (partial writes)."""
     with open(path, errors="replace") as fh:
         for line in fh:
             try:
-                yield json.loads(line)
+                event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(event, dict):
+                yield event
 
 
 def _instant(ts: str) -> datetime | None:
@@ -177,76 +258,152 @@ def seen_at(entry: dict, ts: str) -> None:
         entry["last_ts"] = ts
 
 
-def extract_refs(events, default_repo: str | None):
+def _claude_ref_blobs(events, touched_md: list):
+    for d in events:
+        ts = d.get("timestamp") or ""
+        msg = d.get("message")
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            yield ts, content
+        elif isinstance(content, list):
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "text":
+                    yield ts, b.get("text", "")
+                elif b.get("type") == "tool_use":
+                    inp = b.get("input", {})
+                    # File bodies are code, not session references — fixture
+                    # URLs/PR numbers inside them would self-contaminate.
+                    scan = {k: v for k, v in inp.items()
+                            if k not in ("content", "new_string", "old_string")}
+                    yield ts, json.dumps(scan, ensure_ascii=False)
+                    fp = inp.get("file_path", "")
+                    if b.get("name") in ("Write", "Edit") and fp.endswith(".md"):
+                        touched_md.append(fp)
+
+
+def _codex_ref_blobs(events, touched_md: list):
+    """Codex writes one transcript line per item: a `message` for chat text,
+    and a tool call's request/response as either `custom_tool_call` +
+    `custom_tool_call_output` (the exec-tool build seen locally) or
+    `function_call` + `function_call_output` (the classic shell-tool build
+    documented upstream, not seen locally but kept for forward compatibility).
+    """
+    for d in events:
+        if d.get("type") != "response_item":
+            continue
+        payload = d.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        ts = d.get("timestamp") or ""
+        kind = payload.get("type")
+        if kind == "message":
+            for c in payload.get("content") or []:
+                if isinstance(c, dict) and c.get("type") in ("input_text", "output_text"):
+                    text = c.get("text", "")
+                    yield ts, text
+        elif kind == "custom_tool_call":
+            text = payload.get("input", "")
+            if isinstance(text, str):
+                yield ts, text
+        elif kind == "custom_tool_call_output":
+            output = payload.get("output")
+            if isinstance(output, str):
+                yield ts, output
+            for c in output if isinstance(output, list) else []:
+                if isinstance(c, dict) and isinstance(c.get("text"), str):
+                    yield ts, c["text"]
+        elif kind in ("function_call", "function_call_output"):
+            raw = payload.get("arguments", payload.get("output", ""))
+            text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+            yield ts, text
+
+
+def _pi_ref_blobs(events, touched_md: list):
+    """Pi keeps one `message` event per turn, with `content` a list of blocks
+    (`text`, `toolCall`) whatever the role — a user turn, an assistant turn, or
+    a tool's own result all use the same shape, so one loop reads all three.
+    """
+    for d in events:
+        if d.get("type") != "message":
+            continue
+        msg = d.get("message")
+        if not isinstance(msg, dict):
+            continue
+        ts = d.get("timestamp") or ""
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            ctype = c.get("type")
+            if ctype == "text":
+                text = c.get("text", "")
+                yield ts, text
+            elif ctype == "toolCall":
+                args = c.get("arguments")
+                text = args if isinstance(args, str) else json.dumps(args or {}, ensure_ascii=False)
+                yield ts, text
+
+
+_REF_BLOBS = {"claude": _claude_ref_blobs, "codex": _codex_ref_blobs, "pi": _pi_ref_blobs}
+
+
+def extract_refs(events, default_repo: str | None, harness: str = "claude"):
     """Chronological scan → (github refs, links, touched md files).
 
     github: {"repo#num": {"host","repo","num","first_ts","last_ts","count","url"}}
     links:  {url: {"count","last_ts"}}
+
+    The walk from a harness's own event shape to a flat stream of text blobs
+    is harness-specific (`_REF_BLOBS`); the regex scan of those blobs for a
+    PR, a `gh` command or a plain link is the same for every harness.
     """
     github, links, touched_md = {}, {}, []
     pr_url_re = gh_pr_url_re()
-    for d in events:
-        ts = d.get("timestamp") or ""
-        msg = d.get("message")
-        blobs = []
-        if isinstance(msg, dict):
-            content = msg.get("content")
-            if isinstance(content, str):
-                blobs.append(content)
-            elif isinstance(content, list):
-                for b in content:
-                    if not isinstance(b, dict):
-                        continue
-                    if b.get("type") == "text":
-                        blobs.append(b.get("text", ""))
-                    elif b.get("type") == "tool_use":
-                        inp = b.get("input", {})
-                        # File bodies are code, not session references — fixture
-                        # URLs/PR numbers inside them would self-contaminate.
-                        scan = {k: v for k, v in inp.items()
-                                if k not in ("content", "new_string", "old_string")}
-                        blobs.append(json.dumps(scan, ensure_ascii=False))
-                        fp = inp.get("file_path", "")
-                        if b.get("name") in ("Write", "Edit") and fp.endswith(".md"):
-                            touched_md.append(fp)
-        for blob in blobs:
-            for m in pr_url_re.finditer(blob):
-                host, repo, num = m.group(1), m.group(2), m.group(3)
-                key = f"{repo}#{num}"
-                e = github.setdefault(key, {"host": host, "repo": repo, "num": int(num),
-                                            "first_ts": ts, "last_ts": ts, "count": 0,
-                                            "url": f"https://{host}/{repo}/pull/{num}"})
-                e["count"] += 1
-                seen_at(e, ts)
-            for m in GH_CMD_RE.finditer(blob):
-                args = m.group(2)
-                repo_m = GH_CMD_REPO_RE.search(args)
-                repo = repo_m.group(1) if repo_m else default_repo
-                if not repo:
-                    continue
-                num = pr_number(GH_CMD_REPO_RE.sub(" ", args) if repo_m else args)
-                if not num:
-                    continue
-                key = f"{repo}#{num}"
-                e = github.setdefault(key, {"host": "github.com", "repo": repo,
-                                            "num": int(num), "first_ts": ts, "last_ts": ts,
-                                            "count": 0,
-                                            "url": f"https://github.com/{repo}/pull/{num}"})
-                e["count"] += 1
-                seen_at(e, ts)
-            for m in URL_RE.finditer(blob):
-                url = m.group(0).rstrip(".,;:`")
-                if "{" in url:  # template string, not a real link
-                    continue
-                if pr_url_re.search(url):
-                    continue
-                base = url.split("?")[0]
-                host = base.split("/")[2] if "://" in base else ""
-                if base.lower().endswith(NOISE_EXT) or host.startswith(NOISE_HOST_PREFIX):
-                    continue
-                e = links.setdefault(base, {"count": 0, "last_ts": ts})
-                e["count"] += 1
-                e["last_ts"] = ts
+    blob_source = _REF_BLOBS.get(harness, _claude_ref_blobs)
+    for ts, blob in blob_source(events, touched_md):
+        for m in pr_url_re.finditer(blob):
+            host, repo, num = m.group(1), m.group(2), m.group(3)
+            key = f"{repo}#{num}"
+            e = github.setdefault(key, {"host": host, "repo": repo, "num": int(num),
+                                        "first_ts": ts, "last_ts": ts, "count": 0,
+                                        "url": f"https://{host}/{repo}/pull/{num}"})
+            e["count"] += 1
+            seen_at(e, ts)
+        for m in GH_CMD_RE.finditer(blob):
+            args = m.group(2)
+            repo_m = GH_CMD_REPO_RE.search(args)
+            repo = repo_m.group(1) if repo_m else default_repo
+            if not repo:
+                continue
+            num = pr_number(GH_CMD_REPO_RE.sub(" ", args) if repo_m else args)
+            if not num:
+                continue
+            key = f"{repo}#{num}"
+            e = github.setdefault(key, {"host": "github.com", "repo": repo,
+                                        "num": int(num), "first_ts": ts, "last_ts": ts,
+                                        "count": 0,
+                                        "url": f"https://github.com/{repo}/pull/{num}"})
+            e["count"] += 1
+            seen_at(e, ts)
+        for m in URL_RE.finditer(blob):
+            url = m.group(0).rstrip(".,;:`")
+            if "{" in url:  # template string, not a real link
+                continue
+            if pr_url_re.search(url):
+                continue
+            base = url.split("?")[0]
+            host = base.split("/")[2] if "://" in base else ""
+            if base.lower().endswith(NOISE_EXT) or host.startswith(NOISE_HOST_PREFIX):
+                continue
+            e = links.setdefault(base, {"count": 0, "last_ts": ts})
+            e["count"] += 1
+            e["last_ts"] = ts
     return {"github": github, "links": links, "touched_md": touched_md}
 
 
@@ -497,8 +654,73 @@ def cwd_for_session(session: str) -> str | None:
 _TODO_STATE = {"completed": "done", "in_progress": "active", "pending": "pending"}
 
 
-def latest_todos(events) -> list[dict]:
+def _json_object(raw) -> dict:
+    """A tool call's arguments as a dict. Codex stores them as a JSON string,
+    Pi usually as an object; anything else counts as no arguments."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def latest_todos(events, harness: str = "claude") -> list[dict]:
+    if harness == "codex":
+        return codex_todos(events)
+    if harness == "pi":
+        return pi_todos(events)
     return latest_tasks(events) or todo_write_items(events)
+
+
+def codex_todos(events) -> list[dict]:
+    """The last `update_plan` call's checklist, Codex's equivalent of
+    TodoWrite. Not every Codex build offers that tool, so a session with no
+    plan is the common case, not a bug — `latest_todos` returns `[]` for it.
+    """
+    latest = None
+    for d in events:
+        if d.get("type") != "response_item":
+            continue
+        payload = d.get("payload")
+        if not isinstance(payload, dict) or payload.get("type") != "function_call":
+            continue
+        if payload.get("name") != "update_plan":
+            continue
+        plan = _json_object(payload.get("arguments")).get("plan")
+        if isinstance(plan, list):
+            latest = plan
+    if not latest:
+        return []
+    return [{"text": t.get("step", ""), "state": _TODO_STATE.get(t.get("status", ""), "pending")}
+            for t in latest if isinstance(t, dict)]
+
+
+def pi_todos(events) -> list[dict]:
+    """No local Pi session used a dedicated todo tool, so this reads the last
+    `toolCall` whose name and `todos` argument look like Claude's TodoWrite —
+    a session that tracks a checklist is expected to name it plainly.
+    """
+    latest = None
+    for d in events:
+        if d.get("type") != "message":
+            continue
+        msg = d.get("message")
+        if not isinstance(msg, dict):
+            continue
+        for c in msg.get("content") or []:
+            if not isinstance(c, dict) or c.get("type") != "toolCall":
+                continue
+            if c.get("name") not in ("todo_write", "update_todos", "todos"):
+                continue
+            items = _json_object(c.get("arguments")).get("todos")
+            if isinstance(items, list):
+                latest = items
+    if not latest:
+        return []
+    return [{"text": t.get("content", t.get("text", "")),
+             "state": _TODO_STATE.get(t.get("status", ""), "pending")}
+            for t in latest if isinstance(t, dict)]
 
 
 def latest_tasks(events) -> list[dict]:
@@ -567,7 +789,75 @@ def _task_label(inp: dict, keys: tuple, limit: int = 56) -> str:
     return ""
 
 
-def extract_background(events) -> dict:
+def extract_background(events, harness: str = "claude") -> dict:
+    if harness == "codex":
+        return _extract_background_codex(events)
+    if harness == "pi":
+        # No local Pi session showed a background-work marker: its `subagent`
+        # tool returned in the same turn it was called, with no async id to
+        # track. Nothing to report is the honest answer, not a guess.
+        return {"monitors": [], "shells": [], "agents": []}
+    return _extract_background_claude(events)
+
+
+def _extract_background_codex(events) -> dict:
+    """Subagents from Codex's multi-agent tools. Codex has no background shell
+    or monitor: `exec` holds the turn until the command returns.
+
+    `spawn_agent` answers at once with the agent's path (`/root/<task_name>`),
+    so its output says nothing about the agent being done. The agent is done
+    when it sends its `FINAL_ANSWER` message, when it is interrupted, or when
+    `list_agents` stops calling it `running`.
+    """
+    calls, spawned, started, finished = {}, {}, {}, set()
+    newest = ""
+    for d in events:
+        stamp = d.get("timestamp")
+        if isinstance(stamp, str) and stamp > newest:
+            newest = stamp
+        if d.get("type") != "response_item":
+            continue
+        payload = d.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        kind = payload.get("type")
+        if kind == "function_call":
+            name, call_id = payload.get("name"), payload.get("call_id")
+            args = _json_object(payload.get("arguments"))
+            if call_id:
+                calls[call_id] = name
+            if name == "spawn_agent" and call_id:
+                task = args.get("task_name")
+                key = f"/root/{task}" if isinstance(task, str) and task else call_id
+                spawned[call_id] = [key, task or call_id]
+                started[call_id] = stamp
+            elif name == "interrupt_agent" and isinstance(args.get("target"), str):
+                finished.add(args["target"])
+        elif kind == "function_call_output":
+            call_id = payload.get("call_id")
+            out = _json_object(payload.get("output"))
+            if calls.get(call_id) == "spawn_agent" and isinstance(out.get("task_name"), str):
+                spawned[call_id][0] = out["task_name"]
+            elif calls.get(call_id) == "list_agents":
+                for agent in out.get("agents") or []:
+                    if isinstance(agent, dict) and agent.get("agent_status") != "running":
+                        finished.add(str(agent.get("agent_name")))
+        elif kind == "agent_message":
+            text = " ".join(c.get("text", "") for c in payload.get("content") or []
+                            if isinstance(c, dict) and isinstance(c.get("text"), str))
+            if CODEX_DONE_MARK in text and isinstance(payload.get("author"), str):
+                finished.add(payload["author"])
+
+    def done(path: str) -> bool:
+        return path in finished or path.rsplit("/", 1)[-1] in finished
+
+    agents = [{"label": label, "status": "running"}
+              for call_id, (path, label) in spawned.items()
+              if not done(path) and not _is_stale(started.get(call_id), newest)]
+    return {"monitors": [], "shells": [], "agents": agents}
+
+
+def _extract_background_claude(events) -> dict:
     """Work that runs outside the turn: monitors, background shells, subagents.
 
     Each one ends with the `<task-notification>` for its id, never with the
@@ -736,30 +1026,125 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _harness_in(args: str) -> str | None:
+    """The harness a process command line runs, from its install path or name."""
+    words = args.split()
+    if not words:
+        return None
+    first = words[0].rsplit("/", 1)[-1]
+    if first == "claude" or "/claude/versions/" in args:
+        return "claude"
+    if first == "codex" or "@openai/codex" in args:
+        return "codex"
+    if first == "pi" or "pi-coding-agent" in args:
+        return "pi"
+    return None
+
+
+def pane_harness(session: str) -> str | None:
+    """The harness running in the session's tmux pane, or None.
+
+    tmux names the pane's foreground command, which is rarely the harness:
+    Codex and Pi are node scripts, so the pane says `node`, and Claude's
+    binary is named after its version. When the name is not enough, the
+    command lines of the processes under the pane settle it.
+    """
+    ok, out = run(["tmux", "display", "-p", "-t", session,
+                   "#{pane_current_command}\t#{pane_pid}"])
+    if not ok:
+        return None
+    cmd, _, pid = out.strip().partition("\t")
+    cmd = cmd.strip().lower()
+    if cmd in HARNESSES:
+        return cmd
+    if VERSION_RE.fullmatch(cmd):
+        return "claude"
+    ok, table = run(["ps", "-A", "-o", "pid=,ppid=,args="])
+    if not ok or not pid.strip().isdigit():
+        return None
+    root = pid.strip()
+    children: dict[str, list[tuple[str, str]]] = {}
+    for line in table.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) != 3:
+            continue
+        if parts[0] == root and _harness_in(parts[2]):
+            return _harness_in(parts[2])
+        children.setdefault(parts[1], []).append((parts[0], parts[2]))
+    queue = [root]
+    while queue:
+        for child, args in children.get(queue.pop(0), []):
+            found = _harness_in(args)
+            if found:
+                return found
+            queue.append(child)
+    return None
+
+
+def detect_harness(session: str | None, project: Path) -> str:
+    """Which coding-agent harness owns this session: claude, codex or pi.
+
+    The tmux pane's running command is the strongest signal when a session
+    name is given — a pane runs one harness at a time, and still shows it
+    after the harness itself goes idle waiting on the user. That check is
+    skipped, or inconclusive (no tmux session; a `zmx` session whose pane
+    runs a shell instead of the harness directly), for a session started
+    outside tmux. The fallback then is the project's most recently modified
+    transcript across the three harnesses: whichever one someone is actively
+    driving is the one that wrote most recently.
+    """
+    running = pane_harness(session) if session else None
+    if running:
+        return running
+    candidates = {
+        "claude": find_transcript("auto", project),
+        "codex": find_codex_transcript(project),
+        "pi": find_pi_transcript(project),
+    }
+    best, best_mtime = "claude", -1.0
+    for harness, path in candidates.items():
+        if path is None:
+            continue
+        mtime = path.stat().st_mtime
+        if mtime > best_mtime:
+            best, best_mtime = harness, mtime
+    return best
+
+
+def _discover(harness: str, project: Path):
+    if harness in ("codex", "pi"):
+        found = (recent_codex_transcripts(project) if harness == "codex"
+                 else recent_pi_transcripts(project))
+        return (found[0] if found else None), found
+    return find_transcript("auto", project), recent_transcripts(project)
+
+
 def build_context(session: str | None, project: str | None, resolve: bool) -> dict:
     # No session name means the caller already knows the folder (the Mac, where
     # sessions live in zmx, which tmux cannot answer for).
     cwd = (cwd_for_session(session) if session else None) or project or "."
     proj = Path(cwd)
-    tx = find_transcript("auto", proj)
+    harness = detect_harness(session, proj)
+    tx, siblings = _discover(harness, proj)
     if tx is None:
-        return {"cwd": str(proj), "isClaude": False, "updatedAt": _now(),
+        return {"cwd": str(proj), "isClaude": False, "harness": harness, "updatedAt": _now(),
                 "plan": None, "prs": [], "links": [],
                 "agents": [], "monitors": [], "shells": []}
     events = list(iter_events(tx))
     repo = default_repo_of(proj)
-    refs = extract_refs(events, repo)
-    for other_tx in recent_transcripts(proj):
+    refs = extract_refs(events, repo, harness)
+    for other_tx in siblings:
         if other_tx != tx:
-            merge_refs(refs, extract_refs(iter_events(other_tx), repo))
-    todos = latest_todos(events)
+            merge_refs(refs, extract_refs(iter_events(other_tx), repo, harness))
+    todos = latest_todos(events, harness)
     github = resolve_all(refs["github"]) if resolve else list(refs["github"].values())
     links = [{"url": u, **v} for u, v in refs["links"].items()]
-    return {"cwd": str(proj), "isClaude": True, "updatedAt": _now(),
+    return {"cwd": str(proj), "isClaude": harness == "claude", "harness": harness,
+            "updatedAt": _now(),
             "plan": build_plan(todos),
             "prs": map_prs(github),
             "links": map_links(links),
-            **extract_background(events)}
+            **extract_background(events, harness)}
 
 
 def main():
