@@ -9,6 +9,12 @@ import urllib.request
 DEFAULT_BASE = "https://developers.hostinger.com"
 DEFAULT_ZONES_FILE = "/etc/devmachine/hostinger/zones.json"
 
+# Hostinger's API rejects any TTL below this. A new record with no TTL given
+# gets NEW_RECORD_TTL rather than 0: Hostinger, unlike Cloudflare, has no
+# "automatic" value, so 0 would reach the API as a literal TTL and fail.
+MIN_TTL = 60
+NEW_RECORD_TTL = 3600
+
 # Types whose content cannot round-trip through a single Value string: MX and
 # SRV carry structured data (a priority) that Hostinger folds into "content"
 # and this contract has no field for.
@@ -136,16 +142,22 @@ def put(zone, name, record_type, ttl, contents, overwrite):
     )
 
 
+def resolve_ttl(ttl):
+    if ttl and ttl < MIN_TTL:
+        fail("invalid_record", "ttl must be at least %d seconds" % MIN_TTL)
+    return ttl
+
+
 def cmd_upsert(zone, record):
     name = record["name"]
     record_type = record["type"]
     value = record["value"]
-    ttl = record.get("ttl") or 0
+    ttl = resolve_ttl(record.get("ttl") or 0)
 
     existing = find_rrset(get_zone(zone), name, record_type)
 
     if existing is None:
-        put(zone, name, record_type, ttl, [value], overwrite=False)
+        put(zone, name, record_type, ttl or NEW_RECORD_TTL, [value], overwrite=False)
         print(json.dumps({}))
         return
 

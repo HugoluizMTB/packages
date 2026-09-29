@@ -171,6 +171,42 @@ class ProviderTest(unittest.TestCase):
         self.assertEqual(len(contents), 1)
         self.assertEqual(contents[0]["content"], "198.51.100.20")
 
+    def test_upsert_gives_a_new_record_a_default_ttl_when_none_is_given(self):
+        self.server.zone = []
+        record = {"name": "www", "type": "A", "value": "198.51.100.10", "ttl": 0}
+        result = self.run_provider(["upsert", "example.com"], stdin=json.dumps(record))
+        self.assertEqual(result.returncode, 0)
+        puts = [r for r in self.server.requests if r[0] == "PUT"]
+        self.assertEqual(puts[0][2]["zone"][0]["ttl"], 3600)
+
+    def test_upsert_keeps_an_explicit_ttl_for_a_new_record(self):
+        self.server.zone = []
+        record = {"name": "www", "type": "A", "value": "198.51.100.10", "ttl": 120}
+        result = self.run_provider(["upsert", "example.com"], stdin=json.dumps(record))
+        self.assertEqual(result.returncode, 0)
+        puts = [r for r in self.server.requests if r[0] == "PUT"]
+        self.assertEqual(puts[0][2]["zone"][0]["ttl"], 120)
+
+    def test_upsert_rejects_an_explicit_ttl_below_the_minimum(self):
+        self.server.zone = []
+        record = {"name": "www", "type": "A", "value": "198.51.100.10", "ttl": 30}
+        result = self.run_provider(["upsert", "example.com"], stdin=json.dumps(record))
+        self.assertNotEqual(result.returncode, 0)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["error"]["kind"], "invalid_record")
+        puts = [r for r in self.server.requests if r[0] == "PUT"]
+        self.assertEqual(puts, [])
+
+    def test_upsert_keeps_the_existing_ttl_when_none_is_given_on_replace(self):
+        self.server.zone = [
+            {"name": "www", "type": "A", "ttl": 300, "records": [{"content": "198.51.100.10"}]},
+        ]
+        record = {"name": "www", "type": "A", "value": "198.51.100.20", "ttl": 0}
+        result = self.run_provider(["upsert", "example.com"], stdin=json.dumps(record))
+        self.assertEqual(result.returncode, 0)
+        puts = [r for r in self.server.requests if r[0] == "PUT"]
+        self.assertEqual(puts[0][2]["zone"][0]["ttl"], 300)
+
     def test_upsert_always_sends_overwrite_explicitly(self):
         # overwrite defaults to true on Hostinger's API; a request that omits
         # it is the destructive choice, so every PUT body carries the field.

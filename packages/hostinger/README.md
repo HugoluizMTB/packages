@@ -39,6 +39,12 @@ devmachine credentials push
   providers` shows which zones the token can see.
 - If the token has DNS permission but not Domains portfolio permission, set
   `zones` explicitly or `dns list`/`add` cannot find them.
+- TTL: a new record with no TTL given gets 3600 seconds. Hostinger, unlike
+  Cloudflare, has no "automatic" TTL, so a record cannot be created without a
+  number. A record that already exists keeps its own TTL when none is given.
+  An explicit TTL below Hostinger's minimum of 60 seconds is rejected with an
+  `invalid_record` error, rather than silently raised — the value you asked
+  for is not the value you would get.
 
 ## Learn more
 
