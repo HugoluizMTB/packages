@@ -43,6 +43,10 @@ time](https://mydevmachine.sh/how-it-works/trust-bootstrap/) for why the order m
 Works on **Debian and Ubuntu** only; elsewhere it names your distro and
 stops. The password is used once and written nowhere.
 
+With no `config.yml` yet, it also writes `AGENTS.md` if none exists, telling
+a coding agent how to work in this folder — it never overwrites one already
+there.
+
 | Flag | Meaning |
 | --- | --- |
 | `--force` | discard the existing configuration and start over |
@@ -63,8 +67,8 @@ devmachine setup git [--yes] [--check]
 ```
 
 Turns your configuration directory into a git repository, so you can push
-it to a private remote. `config.yml`, `packages.lock` and `known_hosts`
-are committed — see [versioning your
+it to a private remote. `config.yml`, `packages.lock`, `known_hosts` and
+`AGENTS.md` are committed — see [versioning your
 configuration](https://mydevmachine.sh/how-it-works/versioning-your-configuration/) for what
 never is.
 
@@ -236,14 +240,14 @@ Real copy: `~/.agents/skills/<name>`. Claude's is a link:
 devmachine aliases [--write] [--path p] [--check] [--yes]
 ```
 
-Prints one SSH `Host` entry per workspace, so `ssh alice-devmachine` and
-`mosh alice-devmachine` work from an ordinary terminal.
+Prints one SSH `Host` entry per workspace, so `ssh acme-devmachine` and
+`mosh acme-devmachine` work from an ordinary terminal.
 
 ```
 # >>> devmachine — generated, do not edit
-Host alice-devmachine
+Host acme-devmachine
     HostName 100.64.0.5
-    User alice
+    User acme
     Port 22
     IdentityFile /home/you/.config/devmachine/keys/main
     IdentitiesOnly yes
@@ -466,8 +470,8 @@ spreads it to workspaces using that package. A `kind: secret` credential
 is refused — use `devmachine secrets set`, then `devmachine credentials
 push`.
 
-Same strict fingerprint check as every other command. See [SSH host
-keys](https://mydevmachine.sh/how-it-works/ssh-host-keys/).
+Same strict fingerprint check as every other command. See
+[SSH: logging in and knowing it is your server](https://mydevmachine.sh/how-it-works/ssh/).
 
 ## credentials
 
@@ -559,7 +563,7 @@ devmachine help [command] [--json]
 `0600`:
 
 ```
-2026-09-18T12:00:00Z  workspace alice   ok      "docker ps"
+2026-09-18T12:00:00Z  workspace acme   ok      "docker ps"
 2026-09-18T12:01:00Z  machine main      failed  "sync --tags caddy"
 ```
 
