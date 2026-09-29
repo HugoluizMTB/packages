@@ -152,6 +152,8 @@ against, it passes without doing anything.
 
 ### 3. Tag and push
 
+Push `main` first and wait for CI to pass. Then tag that commit:
+
 ```bash
 git tag -s v16 -m v16
 git push origin v16
