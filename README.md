@@ -112,14 +112,68 @@ devmachine packages validate packages/<name>
 
 ## Releasing
 
+Do these steps in order, before you tag a release.
+
+### 1. Sync the skill references, if the CLI shipped new docs
+
+The `devmachine-skills` package keeps a copy of the devmachine CLI's own docs,
+under `packages/devmachine-skills/skills/*/references`. CI compares that copy
+against the CLI's latest release and fails if they differ. So run this step
+right after any CLI release that changed its docs, before you tag a new
+release here.
+
 ```bash
-./scripts/validate.sh
-git tag -s v2 -m "..."
-git push origin v2
+T=$(mktemp -d)
+git -C ../devmachine-cli archive vX.Y.Z docs | tar -x -C "$T"
+./scripts/sync-skill-references.sh "$T/docs"
+git add packages/devmachine-skills
 ```
 
-The `release` workflow builds the tarball and the checksums and attaches both to
-the release.
+`vX.Y.Z` is the CLI's latest release tag (for example `v0.7.16`). The script
+takes one argument: a checkout of the CLI's `docs/` directory — the folder
+that directly holds `reference/`, `concepts/` and `troubleshooting.md`. Add
+`--check` instead of copying to only report whether the copy is out of date.
+
+Commit the result, if anything changed, before you move on.
+
+### 2. Validate and check for real data
+
+```bash
+./scripts/validate.sh
+./scripts/check-no-real-data.sh
+```
+
+`validate.sh` runs the CLI's own validator over every recipe.
+`check-no-real-data.sh` checks the tree against the maintainer's private
+pattern list, which lives outside this repository; with no list to check
+against, it passes without doing anything.
+
+### 3. Tag and push
+
+```bash
+git tag -s v16 -m "..."
+git push origin v16
+```
+
+Tags here count up from `v2` (`v3`, `v4`, ... `v15`, `v16`, ...) — not semver.
+A tag is signed and, once pushed, never moved: a fix ships as a new tag, so a
+checksum recorded in somebody's lock file stays true.
+
+Pushing the tag runs the `release` workflow. It builds a reproducible tarball
+of `packages/`, writes a `checksums.txt` beside it, and attaches both to the
+GitHub release.
+
+### Ordering between the CLI and this repository
+
+A new manifest field, or any new package capability, is useless until a
+released CLI version understands it. So the CLI release that adds support for
+something always ships before the packages release that uses it.
+
+### `category`
+
+`category` is an optional field on a package's `package.yml`. It groups the
+package with others like it (for example "Security" or "DNS") on the packages
+listing page at https://mydevmachine.sh/packages/.
 
 ## Licence
 
