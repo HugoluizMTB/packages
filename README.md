@@ -123,16 +123,18 @@ right after any CLI release that changed its docs, before you tag a new
 release here.
 
 ```bash
-T=$(mktemp -d)
-git -C ../devmachine-cli archive vX.Y.Z docs | tar -x -C "$T"
-./scripts/sync-skill-references.sh "$T/docs"
+tag=$(gh release view --repo mydevmachine/devmachine --json tagName -q .tagName)
+gh repo clone mydevmachine/devmachine /tmp/cli-docs -- --depth 1 --branch "$tag"
+./scripts/sync-skill-references.sh /tmp/cli-docs/docs
 git add packages/devmachine-skills
 ```
 
-`vX.Y.Z` is the CLI's latest release tag (for example `v0.7.16`). The script
-takes one argument: a checkout of the CLI's `docs/` directory — the folder
-that directly holds `reference/`, `concepts/` and `troubleshooting.md`. Add
-`--check` instead of copying to only report whether the copy is out of date.
+The script takes one argument: a checkout of the CLI's `docs/` directory — the
+folder that directly holds `reference/`, `concepts/` and
+`troubleshooting.md`. This is the same check CI runs, with `--check` added,
+on every push: it compares the generated output against what is committed
+here and fails the build on any difference, so a stale copy never reaches
+main.
 
 Commit the result, if anything changed, before you move on.
 
@@ -151,7 +153,7 @@ against, it passes without doing anything.
 ### 3. Tag and push
 
 ```bash
-git tag -s v16 -m "..."
+git tag -s v16 -m v16
 git push origin v16
 ```
 
@@ -166,8 +168,10 @@ GitHub release.
 ### Ordering between the CLI and this repository
 
 A new manifest field, or any new package capability, is useless until a
-released CLI version understands it. So the CLI release that adds support for
-something always ships before the packages release that uses it.
+released CLI version understands it. An older CLI meets an unknown field with
+no promise of how it behaves — it may ignore it, or refuse the whole file. So
+the CLI release that adds support for something always ships before the
+packages release that uses it.
 
 ### `category`
 
