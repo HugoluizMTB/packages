@@ -25,18 +25,31 @@ never seen.
 
 | Package | Scope | What it does |
 | --- | --- | --- |
-| `essentials` | machine | base, git, firewall, ssh_hardening and caddy, in one package. |
-| `base` | machine | The base tools, a shared tmux config, and the `resume` session picker. |
-| `git` | machine | Installs git. |
-| `docker` | machine | Docker Engine and the Compose plugin, from Docker's own repository. |
-| `caddy` | machine | A reverse proxy that gets its own certificates. |
-| `firewall` | machine | ufw, with SSH open and HTTP optional. |
-| `fail2ban` | machine | fail2ban, with a jail for sshd. |
-| `ssh_hardening` | machine | Password authentication off, for good. |
-| `mac-brew` | machine | Installs Homebrew taps, formulae and casks from lists. |
-| `mac-mise` | machine | Installs mise's global tools from a list. |
-| `devmachine-app` | machine | What the Devmachine macOS app asks a machine for. |
-| `devmachine-skills` | workspace | Teaches supported agents to operate Devmachine and create packages. |
+| [`essentials`](packages/essentials/README.md) | machine | base, git, firewall, ssh_hardening and caddy, in one package. |
+| [`base`](packages/base/README.md) | machine | The base tools, a shared tmux config, and the `resume` session picker. |
+| [`git`](packages/git/README.md) | machine | Installs git. |
+| [`docker`](packages/docker/README.md) | machine | Docker Engine and the Compose plugin, from Docker's own repository. |
+| [`caddy`](packages/caddy/README.md) | machine | A reverse proxy that gets its own certificates. |
+| [`firewall`](packages/firewall/README.md) | machine | ufw, with SSH open and HTTP optional. |
+| [`fail2ban`](packages/fail2ban/README.md) | machine | fail2ban, with a jail for sshd. |
+| [`ssh_hardening`](packages/ssh_hardening/README.md) | machine | Password authentication off, for good. |
+| [`tailscale`](packages/tailscale/README.md) | machine | Joins the machine to a tailnet. |
+| [`cloudflare`](packages/cloudflare/README.md) | machine | DNS zones on Cloudflare. |
+| [`hostinger`](packages/hostinger/README.md) | machine | DNS zones on Hostinger. |
+| [`mac-brew`](packages/mac-brew/README.md) | machine | Installs Homebrew taps, formulae and casks from lists. |
+| [`mac-mise`](packages/mac-mise/README.md) | machine | Installs mise's global tools from a list. |
+| [`devmachine-app`](packages/devmachine-app/README.md) | machine | What the Devmachine macOS app asks a machine for. |
+| [`workspace`](packages/workspace/README.md) | workspace | The Linux account a person works in. |
+| [`zsh`](packages/zsh/README.md) | workspace | zsh, Oh My Zsh, and tmux auto-attach over SSH. |
+| [`mise`](packages/mise/README.md) | workspace | The per-project runtime manager, activated for one account. |
+| [`dev`](packages/dev/README.md) | workspace | The GitHub CLI, bun, Node LTS and unzip for one account. |
+| [`git-key`](packages/git-key/README.md) | workspace | One SSH key the machine pushes with, copied into each workspace. |
+| [`glab`](packages/glab/README.md) | workspace | The GitLab CLI, installed for one account. |
+| [`sentry`](packages/sentry/README.md) | workspace | The Sentry CLI, installed for one account. |
+| [`claude-code`](packages/claude-code/README.md) | workspace | The Claude Code CLI for one account. |
+| [`claude-plugins`](packages/claude-plugins/README.md) | workspace | Installs and updates Claude Code plugins in one account. |
+| [`claude-remote-control`](packages/claude-remote-control/README.md) | workspace | Keeps one account's Claude Code Remote Control session up. |
+| [`devmachine-skills`](packages/devmachine-skills/README.md) | workspace | Teaches supported agents to operate Devmachine and create packages. |
 
 ## A pin is a tag, never a branch
 

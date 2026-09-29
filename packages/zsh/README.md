@@ -1,0 +1,38 @@
+# zsh
+
+zsh as the account's login shell, Oh My Zsh, a tmux config, and a shell that
+attaches to a tmux session when the connection is over SSH. A tmux server
+already running keeps its old configuration until it is told to reload.
+
+- **Scope:** workspace
+- **Category:** Foundation
+- **Needs:** `workspace`
+
+## Settings
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `home` | `/home/<the account>` | Where the account's home is. |
+| `tmux_auto_attach` | `true` | Open a tmux session on every SSH login, so a dropped connection loses nothing. A second connection while the first is live gets a session of its own instead of a second view of the same one. |
+| `tmux_config` | `true` | Write the account's `~/.tmux.conf`. Turn it off to keep a config of your own. |
+
+## Credentials
+
+None.
+
+## Add it
+
+```bash
+devmachine packages add zsh --workspace acme
+devmachine sync
+```
+
+## Notes
+
+- Sets `shell` for the account, so `workspace.shell` is normally left empty
+  when `zsh` is installed.
+- `tmux_config: false` keeps your own `~/.tmux.conf` intact across syncs.
+
+## Learn more
+
+- [Packages](https://mydevmachine.sh/packages/)
