@@ -39,6 +39,23 @@
     creates: "{{ devmachine_zsh_home }}/.oh-my-zsh"
   when: not ansible_check_mode or devmachine_zsh_account.stat.exists
 
+# `devmachine secrets set NAME --workspace <ws>` delivers into ~/.devmachine/env.
+# It goes in .zshenv, not .zshrc, so a command run over ssh sees the secrets too.
+- name: Load the workspace's secrets in every shell
+  ansible.builtin.blockinfile:
+    path: "{{ devmachine_zsh_home }}/.zshenv"
+    marker: "# {mark} devmachine — workspace secrets"
+    create: true
+    owner: "{{ devmachine_workspace.user }}"
+    group: "{{ devmachine_workspace.user }}"
+    mode: "0644"
+    block: |
+      if [ -r "$HOME/.devmachine/env" ]; then
+        set -a
+        . "$HOME/.devmachine/env"
+        set +a
+      fi
+
 # A connection that drops loses nothing, because the work was never in the
 # connection. The second branch is what stops a new SSH login from stealing the
 # screen of one that is already attached: it gets a session of its own instead.

@@ -36,3 +36,10 @@ devmachine sync
 ## Learn more
 
 - [Packages](https://mydevmachine.sh/packages/)
+
+## Workspace secrets
+
+Every shell in the workspace loads `~/.devmachine/env`, the file
+`devmachine secrets set NAME --workspace <ws>` fills. It is sourced from
+`~/.zshenv`, so a command run over `ssh` sees the values too, not only an
+interactive shell. See https://mydevmachine.sh/concepts/credentials/.
