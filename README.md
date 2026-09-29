@@ -25,6 +25,7 @@ never seen.
 
 | Package | Scope | What it does |
 | --- | --- | --- |
+| `essentials` | machine | base, git, firewall, ssh_hardening and caddy, in one package. |
 | `base` | machine | The base tools, a shared tmux config, and the `resume` session picker. |
 | `git` | machine | Installs git. |
 | `docker` | machine | Docker Engine and the Compose plugin, from Docker's own repository. |

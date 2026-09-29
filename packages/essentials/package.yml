@@ -1,0 +1,13 @@
+format: 1
+name: essentials
+scope: machine
+category: Foundation
+summary: >-
+  What almost every machine wants, in one package: base tools, git, a firewall,
+  SSH with passwords kept off, and Caddy to publish sites with HTTPS. Docker is
+  not included; add it with the docker package when you want it.
+
+requires:
+  cli: ">= 0.2.0"
+
+needs: [base, git, firewall, ssh_hardening, caddy]

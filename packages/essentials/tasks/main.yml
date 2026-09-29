@@ -1,0 +1,3 @@
+---
+- name: Essentials is the packages it needs, and installs nothing itself
+  ansible.builtin.meta: noop
