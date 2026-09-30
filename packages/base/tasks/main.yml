@@ -50,6 +50,13 @@
       # terminal.
       set -g set-clipboard on
       set -g allow-passthrough on
+      # The sequence names the "c" clipboard, because mosh forwards only that
+      # one, and still reads %p1: tmux 3.4 with ncurses 6.4 sends nothing when
+      # it is left out. Without an override a tmux* client has no clipboard at
+      # all, and an xterm* one gets a sequence mosh drops.
+      set -as terminal-overrides ',xterm*:Ms=\E]52;c%p1%s;%p2%s\007'
+      set -as terminal-overrides ',screen*:Ms=\E]52;c%p1%s;%p2%s\007'
+      set -as terminal-overrides ',tmux*:Ms=\E]52;c%p1%s;%p2%s\007'
       # This lives here, and not only in each user's ~/.tmux.conf: a tmux server
       # that came up before that file existed keeps the mouse off forever, and
       # then the mouse wheel turns into an up or down arrow inside any

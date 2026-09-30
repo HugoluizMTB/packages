@@ -32,6 +32,10 @@ devmachine sync
 - Sets `shell` for the account, so `workspace.shell` is normally left empty
   when `zsh` is installed.
 - `tmux_config: false` keeps your own `~/.tmux.conf` intact across syncs.
+- A copy in tmux (a mouse drag, or `y` in copy mode) reaches the clipboard of
+  the computer you connect from through OSC 52, over SSH and over mosh, and
+  leaves copy mode. A tmux server that was already running picks this up
+  after `tmux source-file ~/.tmux.conf`.
 
 ## Learn more
 
