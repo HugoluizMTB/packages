@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Joins this machine to a tailnet, for `devmachine login tailscale`.
+
+It runs on the machine, as its admin, in a real terminal: `tailscale up`
+prints a URL to open, or, with a login server, can take a pre-auth key. The
+settings come from the CLI in DEVMACHINE_SETTINGS.
+"""
+import getpass
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+def settings():
+    raw = os.environ.get("DEVMACHINE_SETTINGS") or "{}"
+    try:
+        value = json.loads(raw)
+    except ValueError as error:
+        raise SystemExit("reading DEVMACHINE_SETTINGS: {}".format(error))
+    return value if isinstance(value, dict) else {}
+
+
+def enabled(value):
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "on", "1")
+    return bool(value)
+
+
+def ask_for_key():
+    try:
+        return getpass.getpass(
+            "Pre-auth key from your login server (leave empty to sign in through a URL): "
+        ).strip()
+    except EOFError:
+        return ""
+
+
+def main():
+    chosen = settings()
+    login_server = str(chosen.get("login_server") or "").strip()
+    if login_server and (not login_server.startswith(("https://", "http://")) or " " in login_server):
+        print("tailscale.login_server must be a URL, such as https://net.example.com", file=sys.stderr)
+        return 2
+
+    binary = shutil.which("tailscale")
+    if binary is None:
+        print("tailscale is not installed on this machine: run `devmachine sync` first", file=sys.stderr)
+        return 1
+
+    command = [binary, "up"]
+    if login_server:
+        command.append("--login-server=" + login_server)
+    if enabled(chosen.get("exit_node")):
+        command.append("--advertise-exit-node")
+
+    key = ask_for_key() if login_server else ""
+    if not key:
+        return subprocess.run(command).returncode
+
+    handle, path = tempfile.mkstemp(prefix="tailscale-key-")
+    try:
+        with os.fdopen(handle, "w") as f:
+            f.write(key)
+        return subprocess.run(command + ["--auth-key=file:" + path]).returncode
+    finally:
+        os.remove(path)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

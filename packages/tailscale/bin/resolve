@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Prints the tailnet addresses of one machine, on the person's computer.
+
+The CLI runs it for a `tailscale:<name>` host entry. Exit 3 says Tailscale is
+not reachable from here, which makes the CLI skip the entry and try the next
+address instead of failing.
+"""
+import json
+import shutil
+import subprocess
+import sys
+
+UNAVAILABLE = 3
+STATUS_TIMEOUT = 4
+
+
+def unavailable(reason):
+    print(reason, file=sys.stderr)
+    return UNAVAILABLE
+
+
+def fail(reason):
+    print(reason, file=sys.stderr)
+    return 1
+
+
+def main(argv):
+    if len(argv) != 2:
+        return fail("usage: resolve <name>")
+    name = argv[1]
+
+    binary = shutil.which("tailscale")
+    if binary is None:
+        return unavailable("tailscale is not installed")
+    try:
+        result = subprocess.run(
+            [binary, "status", "--json"], capture_output=True, text=True, timeout=STATUS_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        return fail("tailscale status did not answer")
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        return unavailable("tailscale is not running: " + (detail[0] if detail else "status failed"))
+
+    try:
+        status = json.loads(result.stdout)
+    except ValueError as error:
+        return fail("reading the tailscale status: {}".format(error))
+    if not isinstance(status, dict):
+        return fail("reading the tailscale status: not a JSON object")
+
+    state = status.get("BackendState")
+    if state not in (None, "Running"):
+        return unavailable("tailscale is not running (it says {})".format(state))
+
+    nodes = []
+    if isinstance(status.get("Self"), dict):
+        nodes.append(status["Self"])
+    nodes.extend(p for p in (status.get("Peer") or {}).values() if isinstance(p, dict))
+
+    for matches in (by_host_name, by_dns_label):
+        for node in nodes:
+            addresses = node.get("TailscaleIPs") or []
+            if matches(node, name) and addresses:
+                for address in addresses:
+                    print(address)
+                return 0
+    return unavailable('no machine named "{}" on this tailnet'.format(name))
+
+
+def by_host_name(node, name):
+    return node.get("HostName") == name
+
+
+def by_dns_label(node, name):
+    return (node.get("DNSName") or "").split(".")[0] == name
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

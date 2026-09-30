@@ -33,7 +33,7 @@ never seen.
 | [`firewall`](packages/firewall/README.md) | machine | ufw, with SSH open and HTTP optional. |
 | [`fail2ban`](packages/fail2ban/README.md) | machine | fail2ban, with a jail for sshd. |
 | [`ssh_hardening`](packages/ssh_hardening/README.md) | machine | Password authentication off, for good. |
-| [`tailscale`](packages/tailscale/README.md) | machine | Joins the machine to a tailnet. |
+| [`tailscale`](packages/tailscale/README.md) | machine | Joins the machine to a tailnet, and resolves `tailscale:<name>` addresses. |
 | [`cloudflare`](packages/cloudflare/README.md) | machine | DNS zones on Cloudflare. |
 | [`hostinger`](packages/hostinger/README.md) | machine | DNS zones on Hostinger. |
 | [`mac-brew`](packages/mac-brew/README.md) | machine | Installs Homebrew taps, formulae and casks from lists. |
@@ -98,6 +98,31 @@ extends:
 It is a contribution, not a patch, and it cannot reach anywhere else. `caddy`
 therefore serves nothing by itself — every site is a file some other package
 drops into that directory.
+
+## Network packages
+
+A machine package can answer for a private network's addresses:
+
+```yaml
+network:
+  prefix: tailscale
+  resolve: bin/resolve
+  join: bin/join
+  self_name: bin/self-name
+```
+
+A machine's `hosts` entry written `tailscale:<name>` then belongs to this
+package. `resolve` runs on the person's computer and prints the addresses,
+or exits 3 when the network is not reachable from there. `join` and
+`self_name` run on the machine for `devmachine login tailscale`: the first
+signs it in, the second prints the name to add to `hosts`. The CLI knows the
+prefix and the scripts, never the product — a new network is a new package,
+not a new CLI.
+
+The scripts are Python 3.9 with the standard library only, like an
+entrypoint, and each network package tests them in its own `test/`. The
+contract is in the CLI's
+[network package contract](https://mydevmachine.sh/reference/network-package-contract/).
 
 ## Adding a recipe
 

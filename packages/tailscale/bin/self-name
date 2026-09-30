@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Prints the name this machine answers to on the tailnet.
+
+The CLI adds it to the machine's hosts as `tailscale:<name>`, the name
+`resolve` then looks for.
+"""
+import json
+import shutil
+import subprocess
+import sys
+
+
+def main():
+    binary = shutil.which("tailscale")
+    if binary is None:
+        print("tailscale is not installed on this machine", file=sys.stderr)
+        return 1
+    result = subprocess.run([binary, "status", "--json"], capture_output=True, text=True)
+    if result.returncode != 0:
+        print((result.stderr or "tailscale status failed").strip(), file=sys.stderr)
+        return 1
+    try:
+        status = json.loads(result.stdout)
+    except ValueError as error:
+        print("reading the tailscale status: {}".format(error), file=sys.stderr)
+        return 1
+    me = status.get("Self") if isinstance(status, dict) else None
+    name = me.get("HostName") if isinstance(me, dict) else None
+    if not name:
+        print("the tailscale status did not name this machine", file=sys.stderr)
+        return 1
+    print(name)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

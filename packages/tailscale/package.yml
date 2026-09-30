@@ -14,6 +14,15 @@ variables:
   exit_node:
     summary: Advertise this machine as an exit node. Off unless asked for.
     default: false
+  login_server:
+    summary: The control server `devmachine login tailscale` joins. Empty means Tailscale's own; a URL means your own, such as Headscale.
+    default: ""
+
+network:
+  prefix: tailscale
+  resolve: bin/resolve
+  join: bin/join
+  self_name: bin/self-name
 
 credentials:
   - name: tailscale
