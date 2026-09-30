@@ -139,12 +139,62 @@ devmachine from, and check they say what you expect.
 
 ## A `tailscale:` address is being ignored
 
-**What it means:** devmachine drops it when Tailscale is not installed, or
-does not know that name, and tries the next address instead. This is by
-design.
+**What it means:** devmachine drops a `<prefix>:<name>` entry when the network
+package says the network is not reachable from your computer — Tailscale is
+not installed, not running, or does not know that name — and tries the next
+address instead. This is by design.
 
-**What to do:** Run `tailscale status` and check the server is listed under
-the name you wrote.
+**What to do:** Run `devmachine resolve`. It lists every entry it skipped,
+with the reason the package gave. Then run `tailscale status` and check the
+server is listed under the name you wrote.
+
+## "no package declares the prefix"
+
+**What it means:** A `hosts` entry is written `<prefix>:<name>`, and no
+package in your pinned release or your own `packages/` folder declares that
+prefix in a `network:` block. The entry is skipped.
+
+**What to do:** Add the network package to the machine
+(`devmachine packages add <package>`) and `sync`, or check the prefix for a
+typo. For `tailscale:`, a packages release from before network packages
+still works: the CLI's built-in resolver answers when no package does.
+
+## "the X package's resolve did not answer within 5s"
+
+**What it means:** The package's `resolve` script, which runs on your
+computer, took too long, so its entry was skipped. The network's own
+command is probably stuck: for Tailscale, `tailscale status` hangs too.
+
+**What to do:** Run the network's own status command. Restart its app if
+that hangs as well.
+
+## "joining X did not finish … run `devmachine sync`"
+
+**What it means:** `devmachine login <package>` ran the package's `join`
+script on the machine, and it failed. The most common reason is that the
+package is not on the machine yet: `join` runs from where `sync` put it.
+Otherwise, the script's own output, above the error, says what went wrong.
+
+**What to do:** `devmachine sync`, then `devmachine login <package>` again.
+
+## `ssh <workspace>-devmachine` says "no address answered" or "Connection closed by UNKNOWN"
+
+**What it means:** The alias connects through `devmachine ssh-proxy`, and
+none of the machine's addresses accepted a connection. ssh shows the
+proxy's error, which lists every address and why.
+
+**What to do:** Run `devmachine resolve` to see which addresses were tried.
+If it says `devmachine: command not found` instead, the CLI moved since the
+alias was written: run `devmachine aliases --write` again.
+
+## `doctor` says an alias has "a fixed address, expected one resolved when ssh connects"
+
+**What it means:** The alias was written with the address itself, by an
+older version or while `devmachine` was not on your `PATH`. It works until
+that address stops working.
+
+**What to do:** `devmachine aliases --write`. See
+[SSH aliases that resolve when you connect](https://mydevmachine.sh/how-it-works/addresses-and-fallback/#ssh-aliases-that-resolve-when-you-connect).
 
 ## A setting is accepted, but the package still uses its default
 
@@ -738,6 +788,26 @@ another `devmachine` earlier on your `PATH` is the one that ran.
 **What to do:** Run `which -a devmachine` to see every copy. Remove the ones
 you do not use, then `brew update && brew upgrade mydevmachine/tap/devmachine`
 or the install script.
+
+## `doctor` says `warn  credential: gh  missing`
+
+**What it means:** A package on the machine needs a login or a secret that
+is not there yet. The machine works; only the tool that needs the login does
+not. It is a `warn`, not a `fail`, so `doctor` still exits `0`.
+
+**What to do:** Run the command in the detail: `devmachine login <credential>`
+for a login, or `devmachine secrets set <name>` then `devmachine credentials
+push` for a secret.
+
+## `update` summary says `doctor  machine X unreachable`, and update exited 0
+
+**What it means:** `doctor` could not reach machine X (configuration, host key
+or connection failed), so `update` skipped its sync check; the sync line says
+`X skipped (unreachable)`. That is about the machine, not about `update`, so
+it does not change `update`'s exit code.
+
+**What to do:** Run `devmachine doctor --machine X` to see which check failed,
+fix it, then run `devmachine update` again or `devmachine sync --machine X`.
 
 ## `doctor` says `skip  cli  could not find the latest release`
 

@@ -36,6 +36,7 @@ back to reading files instead.
 | Logins, tokens, API keys, credentials | `devmachine credentials list`, `devmachine login <credential>`, `devmachine secrets set <name>` then `devmachine credentials push` |
 | My app's own secret / API key / `.env` value in a workspace | `devmachine secrets set <NAME> --workspace <workspace> [--env-file <path>] --push` |
 | Send a file / screenshot / attachment to a workspace | `devmachine upload <file>... --workspace <workspace> [--dir <folder>]` (prints the path on the machine) |
+| Which address / IP will be used for a machine, Tailscale or Headscale addresses | `devmachine resolve [--machine <m>]`; join a private network with `devmachine login tailscale` (Headscale: set `tailscale.login_server` first) |
 | Private access to a port (not a public site) | `devmachine tunnel <workspace> <port>` |
 | Server fingerprint / host key changed | `devmachine machines trust [name]` |
 | Where is my config / what's in it | `devmachine config path` / `devmachine config show` |
