@@ -53,7 +53,7 @@ never seen.
 
 ## A pin is a tag, never a branch
 
-The CLI is pointed at a release (`packages: v17`), not at `main`. A branch
+The CLI is pointed at a release (`packages: v18`), not at `main`. A branch
 would mean the set changes under you because somebody pushed an hour ago.
 Upgrading is meant to be a deliberate act with a diff to read.
 
@@ -155,11 +155,11 @@ against, it passes without doing anything.
 Push `main` first and wait for CI to pass. Then tag that commit:
 
 ```bash
-git tag -s v17 -m v17
-git push origin v17
+git tag -s v18 -m v18
+git push origin v18
 ```
 
-Tags here count up from `v2` (`v3`, `v4`, ... `v16`, `v17`, ...) — not semver.
+Tags here count up from `v2` (`v3`, `v4`, ... `v17`, `v18`, ...) — not semver.
 A tag is signed and, once pushed, never moved: a fix ships as a new tag, so a
 checksum recorded in somebody's lock file stays true.
 

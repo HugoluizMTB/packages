@@ -1,6 +1,6 @@
 ---
 name: use-devmachine
-description: "Use when running, inspecting, or troubleshooting the Devmachine CLI itself, or when answering ANY question about a machine, workspace, server, or VPS it manages — even a read-only one such as \"what's published on the VPS\", \"DNS entries/records for my domain\", \"is my site/subdomain/certificate working\", \"what packages are installed\", \"logins, tokens, API keys or credentials\", \"how much RAM/disk/load\", \"is the server healthy\", \"open/connect to my workspace\", \"run a command on the server\", \"private access to a port\", \"did the host key/fingerprint change\", or \"where is my config\". Covers adding or editing a machine (including the local self:true machine) or workspace, adding a package to one, running sync, expose, tunnel, dns, credentials, secrets, login, run --package, upload, Tailscale addresses, or any other devmachine subcommand. Not for writing a new package's Ansible role (see create-devmachine-package)."
+description: "Use when running, inspecting, or troubleshooting the Devmachine CLI itself, or when answering ANY question about a machine, workspace, server, or VPS it manages — even a read-only one such as \"what's published on the VPS\", \"DNS entries/records for my domain\", \"is my site/subdomain/certificate working\", \"what packages are installed\", \"logins, tokens, API keys or credentials\", \"how much RAM/disk/load\", \"is the server healthy\", \"open/connect to my workspace\", \"run a command on the server\", \"private access to a port\", \"did the host key/fingerprint change\", or \"where is my config\". Covers adding or editing a machine (including the local self:true machine) or workspace, adding a package to one, running sync, expose, tunnel, dns, credentials, secrets, login, run --package, upload, update, Tailscale addresses, or any other devmachine subcommand. Not for writing a new package's Ansible role (see create-devmachine-package)."
 ---
 
 # Use Devmachine
@@ -42,6 +42,7 @@ back to reading files instead.
 | List machines / servers | `devmachine machines list` |
 | List workspaces / accounts | `devmachine workspaces list` |
 | SSH aliases for my terminal / aliases stale | `devmachine aliases` (check with `devmachine doctor`, fix with `devmachine aliases --write`) |
+| Update everything / is devmachine up to date / upgrade | `devmachine update` (updates the CLI, packages pin and skills, runs doctor and `sync --check`, then asks before syncing) |
 | Apply pending changes to the server | `devmachine sync` |
 
 Use the CLI as the source of truth. Do not replace a missing CLI operation with
