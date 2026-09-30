@@ -1,6 +1,12 @@
 ---
 devmachine_package_cache_command: apt-get update
 
+# The one repository whose errors a cache refresh lets through, as long as
+# they are the only ones. Caddy signs it with a subkey its own published key
+# lists as expired (https://github.com/caddyserver/dist/issues/130), so apt
+# refuses it; the caddy package decides what to install instead.
+devmachine_package_cache_tolerated: dl\.cloudsmith\.io/public/caddy/
+
 devmachine_tailscale_keyring: /usr/share/keyrings/tailscale-archive-keyring.gpg
 devmachine_tailscale_repo_file: /etc/apt/sources.list.d/tailscale.list
 

@@ -41,3 +41,17 @@ variables:
       no public authority signs a certificate for a bare address. It creates
       no DNS record: pointing the name is `devmachine dns add`.
     default: ""
+  source:
+    summary: >-
+      Where Caddy is installed from. `auto` uses Caddy's apt repository and,
+      when apt cannot check that repository's signature, installs the pinned
+      GitHub release instead. `apt` uses only the repository and fails when it
+      cannot be checked. `github` always installs the pinned GitHub release and
+      removes the repository.
+    default: auto
+  version:
+    summary: >-
+      The Caddy release installed from GitHub, by `source: github` or by the
+      `auto` fallback. The `.deb` is checked against the release's own sha512
+      checksums before it is installed. The apt repository ignores it.
+    default: "2.11.4"

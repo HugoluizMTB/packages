@@ -13,3 +13,10 @@ devmachine_caddy_site: true
 
 # Empty serves the page on port 80 at the machine's address.
 devmachine_caddy_site_domain: ""
+
+# Where Caddy comes from. auto uses Caddy's apt repository and falls back to
+# the GitHub release only when that repository's signature cannot be checked.
+devmachine_caddy_source: auto
+
+# The GitHub release the fallback installs, and the one `source: github` keeps.
+devmachine_caddy_version: "2.11.4"

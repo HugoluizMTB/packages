@@ -4,6 +4,39 @@ devmachine_package_cache_command: apt-get update
 devmachine_caddy_keyring: /etc/apt/keyrings/caddy-archive-keyring.asc
 devmachine_caddy_key_url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
 devmachine_caddy_repo_file: /etc/apt/sources.list.d/caddy.list
+devmachine_caddy_repo_url: https://dl.cloudsmith.io/public/caddy/stable/deb/debian
 devmachine_caddy_repo_line: >-
   deb [signed-by={{ devmachine_caddy_keyring }}]
-  https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main
+  {{ devmachine_caddy_repo_url }} any-version main
+
+# Refreshes Caddy's list alone, so everything it prints is about that one
+# repository, and the lists base refreshed are left as they are.
+devmachine_caddy_repo_refresh_command: >-
+  apt-get update
+  -o Dir::Etc::sourcelist={{ devmachine_caddy_repo_file }}
+  -o Dir::Etc::sourceparts=-
+  -o APT::Get::List-Cleanup=0
+
+devmachine_caddy_installed_command: >-
+  dpkg-query --show --showformat='${db:Status-Status} ${Version}' caddy
+devmachine_caddy_deb_install_command: apt-get install --yes --allow-downgrades
+
+# A release asset is named after the architecture Go names, which is not the
+# one the kernel reports: x86_64 is amd64 and aarch64 is arm64.
+devmachine_caddy_architectures:
+  x86_64: amd64
+  aarch64: arm64
+  armv7l: armv7
+devmachine_caddy_architecture: >-
+  {{ devmachine_caddy_architectures.get(ansible_facts['architecture'], ansible_facts['architecture']) }}
+
+# What apt prints when it cannot check a repository's signature: the key is
+# gone, expired, or does not match the one the repository was signed with.
+devmachine_caddy_signature_errors: EXPKEYSIG|KEYEXPIRED|NO_PUBKEY|is not signed
+
+devmachine_caddy_release_url: >-
+  https://github.com/caddyserver/caddy/releases/download/v{{ devmachine_caddy_version }}
+devmachine_caddy_deb_name: >-
+  caddy_{{ devmachine_caddy_version }}_linux_{{ devmachine_caddy_architecture }}.deb
+devmachine_caddy_checksums_url: >-
+  {{ devmachine_caddy_release_url }}/caddy_{{ devmachine_caddy_version }}_checksums.txt
