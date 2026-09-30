@@ -14,7 +14,7 @@ official set — devmachine's own skills for operating the CLI — with:
 devmachine skills add
 ```
 
-See [shared skills for every workspace](https://mydevmachine.sh/examples/shared-skills-for-every-workspace/)
+See [shared skills for every workspace](https://mydevmachine.sh/guides/shared-skills-for-every-workspace/)
 for a full walkthrough with a package of your own.
 
 ## One shared copy

@@ -121,6 +121,22 @@ computer has no address, so it cannot carry these.
 **What to do:** Remove the field the message names. The same error appears,
 one field at a time, for `user`, `port` and `key`.
 
+## `sync` on a self machine fails with "ESTABLISH LOCAL CONNECTION FOR USER: root"
+
+**What it means:** Ansible asks the shell it runs in who is logged in, not
+your configuration. Some shells — a login shell started by a GUI app, cron,
+or a launcher — leave `LOGNAME` set to `root` with `USER` empty. Ansible
+believed it, looked for `/var/root`, and failed there instead of in your
+own home.
+
+**What to do:** Nothing — this is fixed for you. `devmachine sync` on a
+`self: true` machine pins `ansible_user` in the generated inventory to
+the account devmachine itself runs as (read from the operating system, not
+from `USER`/`LOGNAME`), and exports the right `USER`, `LOGNAME` and `HOME`
+around the `ansible-playbook` run. If you still see this on a current
+release, run `whoami` and `echo $HOME` in the terminal you launched
+devmachine from, and check they say what you expect.
+
 ## A `tailscale:` address is being ignored
 
 **What it means:** devmachine drops it when Tailscale is not installed, or
@@ -174,6 +190,67 @@ even though the values themselves live in your keychain.
 
 **What to do:** Check you are using the same configuration directory you used
 when storing it — see `devmachine config path` above.
+
+## `secrets set --env-file` refuses the path
+
+**What it means:** `--env-file` takes a path relative to the workspace's own
+home, and the one given would land outside it — an absolute path
+(`/etc/passwd`), or one with enough `../` to walk out of the home
+directory.
+
+**What to do:** Give a path inside the workspace, such as `app/.env` or
+`.env`. There is no way to deliver a workspace secret outside that
+workspace's own home.
+
+## `credentials push` says a path "reaches outside the workspace's home through a symbolic link"
+
+**What it means:** The path looked fine on your computer, but on the
+machine one of its directories — or the file itself, or its
+`.devmachine.bak` — is a symbolic link that points outside the workspace's
+home. The path is either the `--env-file` of a workspace secret, or where
+a package delivers a workspace credential (`~/.devmachine/<name>/env`, or
+the package's own `path`). The push runs as the machine's admin, and the workspace's own
+account can create links anywhere in its home, so following one would let
+that account aim a root write at any file on the machine. The push stops
+before it reads or writes anything.
+
+**What to do:** Look at the path on the machine (`ls -la` each directory
+on the way). If the link is yours and meant, point `--env-file` at the
+real file inside the home instead, or replace the link with a real
+directory or file. If nobody in the workspace made it,
+treat it as a warning about what runs in that workspace. A link that stays
+inside the home is followed as usual.
+
+## `sync` says a path "reaches outside the home of <account> through a symbolic link, so the shared login was not copied there"
+
+**What it means:** A login shared across workspaces (such as `gh` or
+`git-key`) lands at its `stored_at` path in each workspace's home. In the
+named account's home, one directory on that path, or the file itself, is a
+symbolic link that points outside the home. The copy runs as that
+account, never as root, so the link could never have let it write a file
+the account could not already write. But a login copied to some other place
+would be lost or leaked, so `sync` stops at that account instead. Nothing is
+written there, and nothing outside the home changes.
+
+**What to do:** Look at the path in that workspace (`ls -la` each directory
+on the way, then the file). Replace the link with a real directory or file,
+or remove it, and run `sync` again. If you want that workspace to keep a
+login of its own, opt it out with `devmachine workspaces edit <name>
+--share <login>=own`. If nobody in the workspace made the link, treat it as
+a warning about what runs in that workspace. A link that stays inside the
+home is followed as usual.
+
+## A workspace secret was pushed, but the app never sees it
+
+**What it means:** `devmachine credentials push` writes the value into
+`~/.devmachine/env` (or the `--env-file` you gave), but nothing runs that
+file for you — that is the shell's job, not the CLI's.
+
+**What to do:** For the default `~/.devmachine/env`, check the workspace's
+shell actually sources it (the `zsh` package does, once installed and
+synced). For `--env-file`, check the app reads that exact file and reloads
+its process after the value changes — this only writes the file, it does
+not restart anything running.
 
 ## `dns status` says a name does not resolve, but it works in the browser
 
@@ -402,6 +479,17 @@ accounts, so "where do I log in" has no single answer.
 **What to do:** Name the workspace. The list in the error shows every
 workspace that uses it.
 
+## "the connection dropped after part of the input was sent"
+
+A machine with several addresses in `hosts:` is normally tried one address
+after another until one answers. That is safe only while nothing has been
+sent yet. This error means the first connection took part of a file or a
+secret and then dropped. Sending the rest to the next address would leave a
+cut-off file on the machine, so the CLI stops instead.
+
+Run the same command again. If one address keeps dropping, move the stable
+one first in `hosts:`.
+
 ## The SSH host key is not trusted
 
 **What it means:** Configurations made by v0.6 and earlier have no stored
@@ -561,6 +649,43 @@ ssh -O exit -o ControlPath=<user cache dir>/devmachine/cm/%C <user>@<address>
 If you do not have the exact address, delete the stale connection file
 directly from `<user cache dir>/devmachine/cm/` instead. Either way, the next
 `run` opens a fresh connection.
+
+## `upload` refuses a file or a folder
+
+**What it means:** one of these, checked on your computer before
+anything connects, or on the machine before anything is written:
+
+- "is a folder: upload sends files" — `upload` sends single files. Send
+  an archive instead (`tar czf notes.tgz notes`) and unpack it with
+  `devmachine run`.
+- "no such file or directory" or "cannot be read" — the path is wrong, or
+  your account cannot read that file.
+- "--dir … reaches outside the home" or "is outside the home" — the
+  folder climbs out with `../`, or is an absolute path in another home.
+  `upload` only writes inside the home of the account it sends to.
+- "reaches outside the home through a symbolic link" — the folder, or one
+  on the way to it, is a link to somewhere outside the home. Following it
+  would put the file wherever the link points.
+- "is not a folder" — a file sits where the folder should be.
+
+With several files, the others are still sent; only the refused ones are
+missing, and the command exits non-zero.
+
+**What to do:** Pick a folder inside the home (the default,
+`~/.cache/devmachine/uploads`, always works), or replace the link on the
+machine with a real folder.
+
+## `run --package` fails with "exit status 127"
+
+**What it means:** the machine has no file at the entrypoint path. The CLI
+builds that path from your configuration, the way `sync` does: a package in
+your own `packages/` directory runs from `/opt/devmachine/roles.local/<name>`,
+and one from the release runs from `/opt/devmachine/roles/<name>`. If you
+added or removed a local copy since the last `sync`, the CLI looks in one
+directory and the machine still holds the package in the other.
+
+**What to do:** Run `devmachine sync`, so the machine matches your
+configuration again.
 
 ## "no package named X, and none is available"
 

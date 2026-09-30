@@ -1,6 +1,6 @@
 ---
 name: use-devmachine
-description: "Use when running, inspecting, or troubleshooting the Devmachine CLI itself, or when answering ANY question about a machine, workspace, server, or VPS it manages — even a read-only one such as \"what's published on the VPS\", \"DNS entries/records for my domain\", \"is my site/subdomain/certificate working\", \"what packages are installed\", \"logins, tokens, API keys or credentials\", \"how much RAM/disk/load\", \"is the server healthy\", \"open/connect to my workspace\", \"run a command on the server\", \"private access to a port\", \"did the host key/fingerprint change\", or \"where is my config\". Covers adding or editing a machine (including the local self:true machine) or workspace, adding a package to one, running sync, expose, tunnel, dns, credentials, secrets, login, run --package, Tailscale addresses, or any other devmachine subcommand. Not for writing a new package's Ansible role (see create-devmachine-package)."
+description: "Use when running, inspecting, or troubleshooting the Devmachine CLI itself, or when answering ANY question about a machine, workspace, server, or VPS it manages — even a read-only one such as \"what's published on the VPS\", \"DNS entries/records for my domain\", \"is my site/subdomain/certificate working\", \"what packages are installed\", \"logins, tokens, API keys or credentials\", \"how much RAM/disk/load\", \"is the server healthy\", \"open/connect to my workspace\", \"run a command on the server\", \"private access to a port\", \"did the host key/fingerprint change\", or \"where is my config\". Covers adding or editing a machine (including the local self:true machine) or workspace, adding a package to one, running sync, expose, tunnel, dns, credentials, secrets, login, run --package, upload, Tailscale addresses, or any other devmachine subcommand. Not for writing a new package's Ansible role (see create-devmachine-package)."
 ---
 
 # Use Devmachine
@@ -35,12 +35,13 @@ back to reading files instead.
 | What's installed / add a tool | `devmachine packages list` / `devmachine packages add <name>` then `devmachine sync` |
 | Logins, tokens, API keys, credentials | `devmachine credentials list`, `devmachine login <credential>`, `devmachine secrets set <name>` then `devmachine credentials push` |
 | My app's own secret / API key / `.env` value in a workspace | `devmachine secrets set <NAME> --workspace <workspace> [--env-file <path>] --push` |
+| Send a file / screenshot / attachment to a workspace | `devmachine upload <file>... --workspace <workspace> [--dir <folder>]` (prints the path on the machine) |
 | Private access to a port (not a public site) | `devmachine tunnel <workspace> <port>` |
 | Server fingerprint / host key changed | `devmachine machines trust [name]` |
 | Where is my config / what's in it | `devmachine config path` / `devmachine config show` |
 | List machines / servers | `devmachine machines list` |
 | List workspaces / accounts | `devmachine workspaces list` |
-| SSH aliases for my terminal | `devmachine aliases` |
+| SSH aliases for my terminal / aliases stale | `devmachine aliases` (check with `devmachine doctor`, fix with `devmachine aliases --write`) |
 | Apply pending changes to the server | `devmachine sync` |
 
 Use the CLI as the source of truth. Do not replace a missing CLI operation with

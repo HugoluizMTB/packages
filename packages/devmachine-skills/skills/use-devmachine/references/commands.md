@@ -111,11 +111,16 @@ rest. Then one check per needed credential (`credential: <key>`) and per
 installed DNS provider (`dns: <provider>`). Exits non-zero if anything
 failed.
 
-The SSH aliases check passes when `~/.ssh/config`'s managed block exists
-and matches what `devmachine aliases` would write today; otherwise it
-**warns**, never fails, with the fix `devmachine aliases --write`. It is
-skipped on a self machine — there is no address to write a Host entry
-for.
+The SSH aliases check runs `ssh -G <alias>` for each workspace alias —
+a local lookup, no connection — and compares the hostname, user, port
+and host key alias against what `devmachine aliases` would write today.
+It passes as soon as every alias resolves correctly, whatever file it
+actually lives in: `~/.ssh/config`'s own managed block, or a file
+someone pulls in with `Include` while keeping `ssh_aliases: false` and
+managing `~/.ssh/config` themselves. Otherwise it **warns**, never
+fails, naming the alias and what is wrong, with the fix `devmachine
+aliases --write`. It is skipped on a self machine — there is no
+address to write a Host entry for.
 
 No credential or DNS provider needed is not a failure. A check that could
 not run reports `skip` and why — "I cannot tell" is not "it is not
@@ -354,6 +359,42 @@ See [packages](concepts/packages.md).
 `run` keeps its SSH connection open for five minutes and reuses it, so a
 script calling it every few seconds skips the handshake each time.
 
+## upload
+
+```
+devmachine upload <file>... [--workspace w] [--dir path] [--mode 0600]
+```
+
+Sends local files into a home on a machine and prints, one per line, the
+absolute path each one landed at. With `--format json` it prints
+`[{"local": "...", "remote": "...", "bytes": N}]`; a file that failed has
+an `error` field instead of `remote`.
+
+- **Where.** `--workspace` sends into that workspace's home, as its own
+  account. Without it, the files go to the home of the machine's admin,
+  on the machine `--machine` names, or the only one configured. A
+  workspace and a `--machine` it does not live on is refused.
+- **Folder.** `~/.cache/devmachine/uploads` by default. `--dir` names
+  another folder, relative to the home (`notes`, `~/notes`) or absolute
+  inside it (`/home/acme/notes`). A folder outside the home is refused,
+  and so is one that leaves it through a symbolic link. Missing folders
+  are created, mode `0700`.
+- **Names.** Each file keeps its name, with the local time before the
+  extension: `report.pdf` becomes `report-20260930-143012.pdf`,
+  `photo.final.png` becomes `photo.final-20260930-143012.png`, and
+  `Makefile` and `.env` get it at the end. A name already taken gets
+  `-2`, `-3` and so on: nothing is ever overwritten. Spaces and accents
+  are kept; only `/`, line breaks and NUL become `_`.
+- **Mode.** `0600` unless `--mode` says otherwise.
+- **Failures.** A folder, a missing file or one you cannot read is
+  refused before anything connects. With several files, every one is
+  tried; the command exits non-zero if any failed, and names each on
+  stderr.
+
+stdout holds only the paths, so a script or an app can read them. Each
+upload is one line in [the command log](#the-command-log). See
+[how an upload lands](https://mydevmachine.sh/how-it-works/uploads/).
+
 ## dns
 
 ```
@@ -436,7 +477,7 @@ Use this instead of `expose` for anything not plain HTTP, or that only
 you should see: a database tool with real data, an inbox with real mail,
 a queue dashboard that can drain a queue.
 
-| | Anyone | Only you |
+| Traffic | Anyone | Only you |
 | --- | --- | --- |
 | **HTTP** | `expose` | `tunnel` |
 | **Anything else** | nothing | `tunnel` |
@@ -467,8 +508,9 @@ plugins or language runtimes — that stays your choice.
 
 ```
 devmachine secrets set <name> [value] [--stdin]
-devmachine secrets list
-devmachine secrets rm <name>
+devmachine secrets set <name> [value] --workspace w [--env-file path] [--push]
+devmachine secrets list [--workspace w]
+devmachine secrets rm <name> [--workspace w] [--from-file]
 devmachine secrets example
 ```
 
@@ -477,9 +519,51 @@ Stores values packages need that are not logins — API keys, tokens.
 `set` with no value asks without echoing, so it never reaches your shell
 history. `list` prints names only.
 
+Values go to the OS keychain when there is one, and otherwise to
+`secrets.json` in the configuration folder, readable only by you.
+`DEVMACHINE_KEYCHAIN=off` skips the keychain and always uses the file —
+the tests and the acceptance suite set it, so a run never writes to, or
+prompts about, your own keychain.
+
 `example` lists which `<NAME>=` a machine's packages need, no values,
 always to stdout — never to a file, since `.env.example` sits one typo
 from `.env`.
+
+### A workspace's own secret
+
+`--workspace` is a different thing from the plain form above: not a
+value a package declared, but your own app's secret — a key your code
+reads. It stores the value under `<workspace>/<name>` and delivers it
+on the next `devmachine credentials push`, or right away with `--push`.
+
+By default it lands in `~/.devmachine/env` — see
+[the `~/.devmachine/env` contract](#the-devmachineenv-file). `--env-file
+<path>` delivers into that dotenv file instead, relative to the
+workspace's home: the existing `<NAME>=` line is replaced, or a new one
+appended, and everything else in the file is left exactly as it was. A
+path that would reach outside the workspace's home is refused — here
+for `../` or an absolute path, and on the machine for a symbolic link
+that leads out of it. The
+first time it edits a file that already existed, it keeps a copy at
+`<path>.devmachine.bak`. See [credentials: your app's own
+secrets](concepts/credentials.md#your-apps-own-secrets).
+
+Setting the same name again with a different `--env-file` (or with none,
+back to the default) moves it: the next push takes the `<NAME>=` line
+out of the file it was in before, then writes it to the new one.
+
+`list --workspace w` shows only that workspace's own secrets, with
+where each is delivered. `rm --workspace w --from-file` also removes
+the name from its file, on the next `credentials push` — it is not
+edited here, so `rm` never needs to reach the machine.
+
+### The `~/.devmachine/env` file
+
+A sourceable file inside every workspace, `KEY='value'` per line,
+0600, owned by the workspace's own account. It holds every workspace
+secret delivered with no `--env-file`. A workspace's shell is expected
+to source it on login — the `zsh` package does — so `export`ing
+anything more is never necessary.
 
 ## login
 
@@ -501,9 +585,11 @@ push`.
 `login tailscale` does one thing more: once signed in, it asks the machine
 for its name on the tailnet (`tailscale status --json`) and, unless the
 machine's `hosts` already has a `tailscale:` entry, adds `tailscale:<name>`
-above the public address in `config.yml`. The public address stays as a
-fallback. When the name cannot be read, it prints the exact line to add by
-hand instead. See [private networks](https://mydevmachine.sh/concepts/private-networks/).
+above the public address in `config.yml`, writing `hosts:` as a block
+list, one address per line, with any comment next to an address kept.
+The public address stays as a fallback. When the name cannot be read, it prints the machine's
+`hosts:` block to paste instead, with `- tailscale:<name>` first;
+`<name>` is what `tailscale status` on the machine lists for it. See [private networks](https://mydevmachine.sh/concepts/private-networks/).
 
 Same strict fingerprint check as every other command. See
 [SSH: logging in and knowing it is your server](https://mydevmachine.sh/how-it-works/ssh/).
@@ -524,6 +610,15 @@ Never prints a value.
 browser session) and naming any secret never stored; exits non-zero if
 it found one. A workspace's own value (`<workspace>/<name>`) wins over
 the shared one. `--check` previews and writes nothing.
+
+It also delivers every workspace's own secret set with `secrets set
+--workspace` (see above) whose workspace lives on the machine being
+pushed to, and removes the ones marked with `secrets rm --from-file`.
+
+Anything it delivers inside a workspace's home — a package's workspace
+credential or a workspace's own secret — is refused when a symbolic link
+on the way leads out of that home, and the file is replaced, never
+written through, so a link in its place cannot redirect the write.
 
 ## packages
 
@@ -597,7 +692,7 @@ devmachine help [command] [--json]
 
 ## The command log
 
-`run` and `sync` each append one line to `<config>/history.log`, mode
+`run`, `upload` and `sync` each append one line to `<config>/history.log`, mode
 `0600`:
 
 ```
