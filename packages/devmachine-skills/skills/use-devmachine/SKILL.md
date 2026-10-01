@@ -23,7 +23,7 @@ back to reading files instead.
 | Question or need | Command |
 | --- | --- |
 | What's published / my sites / subdomains / Caddy routes | `devmachine expose list` |
-| Publish a port as a site | `devmachine expose add <workspace> <port> --host <host>` |
+| Publish a port as a site | `devmachine expose add <workspace> <port> --host <host>` (live in seconds, no sync needed) |
 | DNS records / entries of a domain or zone | `devmachine dns list [zone]` |
 | Does my domain/site work, certificate valid | `devmachine dns status [host]` |
 | Add or change a DNS record | `devmachine dns add <name> <type> <value>` |
