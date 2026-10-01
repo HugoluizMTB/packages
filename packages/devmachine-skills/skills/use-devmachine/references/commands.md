@@ -545,6 +545,41 @@ stdout holds only the paths, so a script or an app can read them. Each
 upload is one line in [the command log](#the-command-log). See
 [how an upload lands](https://mydevmachine.sh/how-it-works/uploads/).
 
+## download
+
+```
+devmachine download <remote-path>... [--workspace w] [--to dir]
+```
+
+Brings files or folders from a home on a machine to this computer and
+prints, one per line, the local path each one was saved at. With
+`--format json` it prints
+`[{"remote": "...", "local": "...", "bytes": N, "folder": false}]`; a
+path that failed has an `error` field instead of `local`.
+
+- **Who reads.** `--workspace` reads as that workspace's own account, so
+  it gets exactly what that account can read. Without it, the machine's
+  admin reads, on the machine `--machine` names, or the only one
+  configured. A workspace and a `--machine` it does not live on is
+  refused.
+- **Which path.** Relative to the home (`proj/report.pdf`), starting with
+  `~/`, or absolute (`/home/acme/proj/report.pdf`). Put `--` before a
+  path that starts with `-`.
+- **Where to.** `~/Downloads` by default. `--to` names another folder,
+  which must already exist: a typo is refused before anything connects.
+- **Names.** Each file keeps its name. A name already taken gets `-2`,
+  `-3` and so on before the extension: nothing is ever overwritten.
+- **Folders.** A folder arrives as one `<name>.tar.gz`, with the folder
+  at its top. Unpack it with `tar xzf <name>.tar.gz`, or double-click it
+  in Finder.
+- **Failures.** With several paths, every one is tried; the command exits
+  non-zero if any failed, and names each on stderr. A failed or cut
+  transfer leaves nothing behind.
+
+stdout holds only the paths, so a script or an app can read them. Each
+download is one line in [the command log](#the-command-log). See
+[how a download lands](https://mydevmachine.sh/how-it-works/downloads/).
+
 ## dns
 
 ```
@@ -873,6 +908,7 @@ always, and `ssh <ws>-devmachine` when aliases are on.
 
 ```
 devmachine update [--machine m] [--skip-cli] [--skip-packages] [--yes]
+devmachine update --cli-only [--format json]
 ```
 
 Brings everything up to date, then stops before it changes a machine. Five
@@ -904,6 +940,20 @@ steps, in order, each with a short header:
 | `--skip-cli` | leave the CLI as it is |
 | `--skip-packages` | leave the packages pin as it is |
 | `--yes` | answer yes to the sync question — this changes machines; use it only in automation you trust |
+| `--cli-only` | run step 1 alone and stop: no packages pin, skills, doctor or sync, and no configuration is read. It cannot be combined with the other flags or `--machine` |
+
+With `--cli-only`, a build from source (`devmachine version` says `dev`)
+is an error, not a skip: there is no install to update, so it says what to
+run instead. With `--cli-only --format json`, the log goes to stderr and
+stdout gets one object at the end:
+
+```json
+{"from": "0.7.22", "to": "0.7.23", "method": "homebrew", "status": "updated", "ok": true}
+```
+
+`method` is `homebrew`, `download` (the release archive) or `source`;
+`status` is `updated`, `already latest` or `failed`, and a failure adds
+`error` with the reason and exits non-zero.
 
 The output ends with one line per step: `updated`, `already latest`, `ok`,
 `nothing to do`, `skipped` or `failed`, with the reason. The doctor line
@@ -916,8 +966,9 @@ CLI update, the packages pin, the skills, the sync check, or a sync you
 applied. What doctor finds never fails `update`; run `devmachine doctor`
 when a script needs that exit code. Saying no to the sync is not a failure.
 
-`update` prints for a person, so it refuses `--format json`; use `doctor`
-and `sync --check` with `--format json` instead. Why it works this way:
+Without `--cli-only`, `update` prints for a person, so it refuses
+`--format json`; use `doctor` and `sync --check` with `--format json`
+instead. Why it works this way:
 [Updating](https://mydevmachine.sh/how-it-works/updating/).
 
 ## version, help
@@ -929,7 +980,7 @@ devmachine help [command] [--json]
 
 ## The command log
 
-`run`, `upload` and `sync` each append one line to `<config>/history.log`, mode
+`run`, `upload`, `download` and `sync` each append one line to `<config>/history.log`, mode
 `0600`:
 
 ```

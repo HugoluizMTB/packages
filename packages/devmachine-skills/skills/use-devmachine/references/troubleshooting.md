@@ -779,6 +779,34 @@ missing, and the command exits non-zero.
 `~/.cache/devmachine/uploads`, always works), or replace the link on the
 machine with a real folder.
 
+## `download` refuses a path
+
+**What it means:** one of these, checked on your computer before
+anything connects, or on the machine before anything is written here:
+
+- "--to … no such file or directory" or "is not a folder" — the folder
+  you named with `--to` does not exist on your computer. `download`
+  never creates it, so a typo cannot scatter files somewhere new.
+- "… does not exist" — the path is wrong, or it sits inside a folder the
+  account cannot enter, which looks the same from that account. A
+  relative path starts at the home of the account that reads it: the
+  workspace's with `--workspace`, the admin's without.
+- "… cannot be read" — the file is there, but the account that reads it
+  has no permission. Read it as another account (drop `--workspace` to
+  read as the admin), or change its permissions on the machine.
+- "… is not a regular file" — a device, a socket or a pipe. Only files
+  and folders can be downloaded.
+- "/ is the whole disk" — name a folder inside it instead.
+- "reading … : tar: …" — a folder was packed, but tar could not read
+  something inside it, usually a file the account has no permission for.
+  The archive is dropped rather than saved incomplete.
+
+With several paths, the others are still downloaded; only the refused
+ones are missing, and the command exits non-zero.
+
+**What to do:** Check the path with `devmachine run --workspace <w> -- ls -la <path>`,
+which reads as the same account.
+
 ## `run --package` fails with "exit status 127"
 
 **What it means:** the machine has no file at the entrypoint path. The CLI
@@ -811,6 +839,17 @@ file is checked before anything is written, and your CLI is exactly as it was.
 **What to do:** Run `devmachine update` again. If it keeps failing, install by
 hand with `curl -fsSL https://mydevmachine.sh/install.sh | sh`, which checks
 the same checksum, from another network.
+
+## `update --cli-only` says "\"dev\" was built from source"
+
+**What it means:** This `devmachine` was built from the source code, not
+installed from a release, so it has no release version and no install that
+`update` could replace. Plain `update` skips the CLI step for such a build;
+`--cli-only` has nothing else to do, so it fails.
+
+**What to do:** Build it again from the source (`git pull && make build`),
+or install a release with `curl -fsSL https://mydevmachine.sh/install.sh |
+sh` and remove the built copy from your `PATH`.
 
 ## `update` says "replacing …: permission denied"
 
