@@ -103,7 +103,31 @@ tracked-files check.
 devmachine doctor [--machine m]
 ```
 
-Checks whether a machine is healthy and reports what is wrong.
+Checks whether your machines are healthy and reports what is wrong.
+
+With one machine, or with `--machine`, it checks that machine. With
+several machines and no `--machine`, it checks every one of them, in the
+order of `config.yml`, one block each:
+
+```
+machine main:
+  pass  configuration       machine "main", 2 address(es), admin root, port 22, 1 workspace(s)
+  pass  host key            SHA256:… at 203.0.113.10
+  pass  connection          connected through 203.0.113.10
+  …
+
+machine laptop:
+  pass  configuration       machine "laptop", your computer as a machine, 1 workspace(s)
+  …
+
+this computer:
+  pass  cli                 0.7.21 is the latest
+  pass  packages pin        v17 is the latest
+```
+
+Doctor only reads, so checking all of them is safe; it never guesses
+which one you meant, because it does not have to. A machine that cannot be
+reached gets its own `fail` and does not stop the others.
 
 Six checks in order: configuration, SSH fingerprint, login, operating
 system, Ansible installed, SSH aliases. A broken fingerprint stops the
@@ -120,19 +144,46 @@ unsupported operating system, no Ansible, or, on a self machine, a bundle
 folder that cannot be written).
 
 The exit code is `0` when every check passed, warned or was skipped, and
-non-zero only when a check failed. `--format json` prints the same checks
-with the same statuses (`pass`, `warn`, `fail`, `skip`); its `ok` is `false`
-only when a check failed.
+non-zero only when a check failed — on any machine, when there are several.
+The error names the machines that failed.
 
-The SSH aliases check runs `ssh -G <alias>` for each workspace alias —
-a local lookup, no connection — and compares the hostname, user, port
-and host key alias against what `devmachine aliases` would write today.
-It passes as soon as every alias resolves correctly, whatever file it
-actually lives in: `~/.ssh/config`'s own managed block, or a file
-someone pulls in with `Include` while keeping `ssh_aliases: false` and
-managing `~/.ssh/config` themselves. Otherwise it **warns**, never
-fails, naming the alias and what is wrong, with the fix `devmachine
-aliases --write`. It is skipped on a self machine — there is no
+`--format json` prints the same checks with the same statuses (`pass`,
+`warn`, `fail`, `skip`); `ok` is `false` only when a check failed. For one
+machine (or with `--machine`) the shape is:
+
+```json
+{"checks": [{"name": "configuration", "status": "pass", "detail": "…"}, …], "ok": true}
+```
+
+With several machines and no `--machine`, each machine gets its own entry
+under `machines`, and the top-level `checks` holds only the checks about this
+computer (`cli`, `packages pin`). The top-level `ok` is `false` when any
+check anywhere failed:
+
+```json
+{
+  "machines": [
+    {"machine": "main", "checks": [ … ], "ok": true},
+    {"machine": "laptop", "checks": [ … ], "ok": false}
+  ],
+  "checks": [{"name": "cli", "status": "pass", "detail": "…"}, …],
+  "ok": false
+}
+```
+
+The SSH aliases check runs only when `ssh_aliases: true` is set, that
+is, when devmachine keeps the aliases for you. It runs `ssh -G <alias>`
+for each workspace alias — a local lookup, no connection — and compares
+the hostname, user, port and host key alias against what `devmachine
+aliases` would write today. It passes as soon as every alias resolves
+correctly, whatever file it actually lives in. Otherwise it **warns**,
+never fails, naming the alias and what is wrong, with the fix
+`devmachine aliases --write`.
+
+With `ssh_aliases: false` (or left out) it reports `skip  ssh aliases
+managed outside devmachine (ssh_aliases: false)`: you keep
+`~/.ssh/config` yourself, so there is nothing for devmachine to compare
+it to. It is not reported at all on a self machine — there is no
 address to write a Host entry for.
 
 Last come two checks about your computer, not the machine: `cli` (is this
@@ -619,7 +670,9 @@ hand, once.
 
 `doctor` checks `ssh`/`mosh` on `PATH` (mosh is a warning only), an SSH
 agent or configured key, and whether `~/.ssh/config` matches what
-`devmachine aliases --write` would produce now.
+`devmachine aliases --write` would produce now. That last one runs only
+with `ssh_aliases: true`; otherwise it reports `skip` — you keep the file
+yourself.
 
 `setup` installs what is missing via Homebrew on a Mac; on Linux it names
 what to install instead of guessing. Never installs an editor, shell
