@@ -95,8 +95,9 @@ Field notes:
 `devmachine run --package devmachine-app -- caddy-logs --lines 200` prints
 the tail of Caddy's own journal (`journalctl -u caddy -n <lines> --no-pager`)
 as plain text on stdout — a log is read, not parsed, so this is not JSON.
-`--lines` defaults to 200. A failure (no `caddy` unit, `journalctl` missing)
-is reported on stderr with a non-zero exit.
+`--lines` defaults to 200. On a machine without Caddy, `journalctl` finds no
+entries: the output is `-- No entries --` and the exit is zero. A real failure
+(`journalctl` missing, a timeout) is reported on stderr with a non-zero exit.
 
 ## Learn more
 
