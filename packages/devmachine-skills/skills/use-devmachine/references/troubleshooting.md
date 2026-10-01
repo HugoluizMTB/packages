@@ -17,6 +17,21 @@ still work either way — only the plain `ssh`/`mosh` form, and tools that dial
 `ssh` themselves (VS Code Remote-SSH, Zed, the macOS app), need the alias.
 See [SSH aliases](https://mydevmachine.sh/concepts/reaching-your-server/#ssh-aliases).
 
+## A new workspace's alias works for a moment, then "Could not resolve hostname"
+
+**What it means:** The aliases ended up in two files. Something else owns
+`~/.ssh/config` — a template, a dotfiles manager — and keeps the aliases
+in a file it `Include`s, while the CLI was writing its block into
+`~/.ssh/config` itself. The next time that tool rewrote `~/.ssh/config`,
+the CLI's block went with it, and the included file never learned about
+the new workspace.
+
+**What to do:** Tell the CLI where the aliases live, once:
+`devmachine aliases --write --path ~/.ssh/<that-file> --yes`. It records
+the file as `ssh_aliases_path`, empties the block it had left in
+`~/.ssh/config`, and every later change — a new workspace, a new machine —
+is written there.
+
 ## "several machines are configured: say which one with --machine"
 
 **What it means:** You have more than one server configured, and this command
@@ -105,6 +120,79 @@ packages, on the server — so the server needs it installed.
 **What to do:** Install it once: `apt install ansible`, or whatever your
 distribution calls it. Everything after that is `sync`'s job. `doctor` still
 tells you the truth about everything else without it.
+
+## "the admin login cannot become root"
+
+**What it means:** The machine's `user` in `config.yml` is not root, and
+`sudo -n true` fails as that account — its `sudo` wants a password, or it
+has none. The CLI needs root to turn password login off, install Ansible
+and run `sync`, and nobody is there to type a password, so it stops before
+changing anything.
+
+**What to do:** Either log in as root (`user: root`, with the key in
+root's `authorized_keys`), or give the account passwordless sudo, once,
+on the machine:
+
+```
+echo 'alice ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/devmachine-alice
+sudo chmod 440 /etc/sudoers.d/devmachine-alice
+```
+
+Then run the command again. See
+[an admin login that is not root](https://mydevmachine.sh/how-it-works/trust-bootstrap/#an-admin-login-that-is-not-root).
+
+## `setup` fails with "Could not open lock file … Permission denied", or `sync` with "sending a directory to /opt/devmachine … mkdir: Permission denied"
+
+**What it means:** The admin login is not root, and the CLI is older than
+the one that runs system steps through `sudo -n`. Those versions ran
+`apt-get`, the SSH hardening and the bundle upload as the admin itself.
+
+**What to do:** Update the CLI (`devmachine update`) and run the same
+command again. Nothing was half-applied: both errors happen before the
+first change. If it then says "the admin login cannot become root", see
+the entry above.
+
+## `setup` says the machine "answered through Tailscale SSH"
+
+**What it means:** Port 22 on the address you gave is Tailscale SSH, not
+`sshd`. Tailscale lets tailnet members in without checking a key, so the
+CLI cannot prove the key from there. It installs the key anyway, so the
+machine stays reachable when Tailscale SSH is off or you are outside the
+tailnet.
+
+**What to do:** Nothing, usually. To prove the key on its own, connect to
+the machine's address outside Tailscale (its LAN or public IP) with
+`ssh -o IdentitiesOnly=yes -o IdentityAgent=none -i <key> <user>@<address>`.
+A machine set up by an older CLI over Tailscale SSH may have no key
+installed at all: `devmachine setup --machine <name>` installs it.
+
+## `setup` shows a host key fingerprint that is not the one in `~/.ssh/known_hosts`
+
+**What it means:** Usually not a different server. A server has several
+host keys — ED25519, ECDSA, RSA — and the CLI asks for its own preferred
+algorithm, which can be a different one from the key your own `ssh`
+recorded. Two fingerprints of different types never match each other.
+
+**What to do:** Compare like with like. The CLI names the type it was
+shown (`presented ecdsa-sha2-nistp256 host key SHA256:…`). Over a
+connection you already trust, list every key with
+`for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf $f; done` and
+check the line of the same type. Only a mismatch of the same type means
+something changed.
+
+## "Missing privilege separation directory: /run/sshd"
+
+**What it means:** `sshd -t`, which checks the SSH configuration before
+it is reloaded, needs `/run/sshd`. systemd makes that directory only when
+`ssh.service` starts. On Ubuntu 24.04 and later sshd starts through
+`ssh.socket`, and a machine reached only through Tailscale SSH may never
+have started it, so the directory is not there. Nothing about the
+configuration is wrong.
+
+**What to do:** Update the CLI and the packages release: both now make the
+directory before the check. Until then, `sudo install -d -m 0755
+/run/sshd` on the machine and run the command again; the directory is
+temporary and gone at the next reboot.
 
 ## "ansible-playbook is not on your computer"
 
@@ -610,16 +698,46 @@ devmachine trusted before. This can mean a deliberate rebuild, a
 configuration mistake, or an attack — devmachine cannot tell which, and will
 not connect until you decide.
 
-**What to do:** Verify the address and both fingerprints yourself. If you
-just rebuilt the server on purpose, run
-`devmachine machines trust <machine> --replace`. Add `--check` to preview
-without writing, and `--yes` to skip confirmation — that never substitutes
-for `--replace`.
+**What to do:** Run `devmachine machines trust <machine> --check`. It reads
+the presented key without logging in, writes nothing, and prints both
+fingerprints, a command to print the same key on the server, and the fix.
+Run that command from the machine's own console — the provider's web
+console, or `limactl shell` on the Mac that runs a Lima VM — never
+through the SSH connection you are trying to verify. If the fingerprints match, run
+`devmachine machines trust <machine> --replace`. `--yes` skips confirmation
+— that never substitutes for `--replace`.
 
 `run` can keep working for up to five minutes after the key changes. It
 reuses the connection it opened last time, which was checked when it was
 opened and still goes to the same server. The first new connection after
 that checks the key again and stops with this error.
+
+## The host key changed after restarting a Lima VM
+
+**What it means:** Usually nothing bad. Lima hands the VM a new cloud-init
+instance ID (`iid-<time>`) on every `limactl start`, so cloud-init treats
+each boot as a new instance and, by default (`ssh_deletekeys`), deletes the
+SSH host keys and writes new ones. Restarting the VM — to change its
+memory or CPUs, or for any other reason — gives it a new host key. The
+disk, the users and the Tailscale address stay the same. A different local
+network address underneath Tailscale does not matter either: the key is
+pinned to the machine's name, not to an address.
+
+**What to do:** Check the fingerprint from the Mac that runs the VM, with
+`limactl shell <instance>` — a local path to the VM, not the network path
+you are trying to verify — and compare it as in
+[The SSH host key changed](#the-ssh-host-key-changed). The files under
+`/etc/ssh/ssh_host_*` carry the time of the last boot. Then replace the
+key.
+
+To keep the keys across restarts, tell cloud-init not to delete them, on
+the VM:
+
+```
+echo 'ssh_deletekeys: false' | sudo tee /etc/cloud/cloud.cfg.d/99-keep-host-keys.cfg
+```
+
+The next restart keeps the key you trusted.
 
 ## The SSH trust file is malformed
 

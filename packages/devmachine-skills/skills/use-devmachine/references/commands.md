@@ -34,8 +34,9 @@ Then it gets the server ready, in order: try the key; if that fails, ask
 for the password (never shown on screen); install the key; open a **new
 connection using only the key** to prove it works; turn password login
 off; install Ansible. The new machine is written with the `essentials`
-package (base, git, firewall, ssh_hardening and caddy), so the first `sync`
-installs them; `--no-essentials` leaves it with none. Only a pinned package
+package (base, git, firewall, ssh_hardening, caddy and devmachine-app — see
+[what a new machine starts with](https://mydevmachine.sh/how-it-works/what-a-new-machine-starts-with/)),
+so the first `sync` installs them; `--no-essentials` leaves it with none. Only a pinned package
 release that has `essentials` gets it — an older one starts empty and says so. If the proof step fails, nothing is locked down and
 the error says where to look. See [setting up a server for the first
 time](https://mydevmachine.sh/how-it-works/trust-bootstrap/) for why the order matters.
@@ -215,7 +216,8 @@ as it prints, so it is the quickest way to find what is wrong.
 devmachine machines list                  each machine, its addresses, port and workspaces
 devmachine machines add [--no-harden] [--no-essentials] [--no-aliases] [--yes]   set up another server and record it
 devmachine machines add --self <name>     add your computer as a machine, with no address
-devmachine machines trust [name] [--check] [--replace] [--yes]   check or update its SSH fingerprint
+devmachine machines add --name <n> --address <a> --fingerprint <SHA256:…> [--user u] [--port p] [--key new|file] [--tailscale]   the same, asking nothing
+devmachine machines trust [name] [--check] [--replace] [--expect <fp>] [--yes]   check or update its SSH fingerprint
 devmachine machines rm <name> [--yes]     forget a machine; the server keeps running
 devmachine machines create-local <name>   a machine on your computer
 devmachine machines start <name>          start a local machine
@@ -238,8 +240,31 @@ is asked. Refuses if a self machine already exists, or the name is taken.
 See [your computer as a machine](https://mydevmachine.sh/how-it-works/your-computer-as-a-machine/)
 for how this differs from `machines create-local`.
 
+**Unattended.** `--address` makes `add` ask nothing, so a script or an
+agent adds a machine in one command; every question has a flag, and what
+is left out takes its default:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--name` | (required) | the machine's name |
+| `--address` | — | an IP, a hostname, or `tailscale:<name>` |
+| `--user` | `root` | the admin login: root, or an account with passwordless sudo |
+| `--port` | `22` | the SSH port |
+| `--key` | `new` | a key of the CLI's own for this machine (made, or reused when it exists), or a private key file |
+| `--fingerprint` | — | the host key to trust on first contact |
+| `--tailscale` | off | also add the `tailscale` package |
+
+SSH aliases are written unless `--no-aliases`. `--fingerprint` is required
+for a machine not trusted yet: with nobody to ask, trusting whatever
+answers would be trust on first use with no one looking. Without it, or
+with a different one, `add` stops before changing anything and prints the
+fingerprint it was shown, to check through the provider console or a
+connection you already trust. A key that does not log in yet stops it
+too: there is no password to ask for, so put the key's public half in the
+admin's `authorized_keys` first, or run `add` without flags.
+
 Adding or removing a machine, like adding or removing a workspace, refreshes
-`~/.ssh/config`'s managed block when `ssh_aliases: true` is set — see
+the SSH aliases when `ssh_aliases: true` is set — see
 [SSH aliases](https://mydevmachine.sh/concepts/reaching-your-server/#ssh-aliases).
 
 A self machine has no `hosts`, `user`, `port` or `key`, and no workspace
@@ -249,9 +274,17 @@ on it, naming the reason.
 
 `trust` reads the server's public fingerprint without logging in: asks
 before saving a new one, does nothing if it matches, refuses a changed
-one unless `--replace`. `--check` compares without writing. JSON fields:
-`machine`, `address`, `status`, `key_type`, optional
-`current_fingerprint`, `presented_fingerprint`, `check`, `changed`.
+one unless `--replace`. `--check` compares without writing and reports a
+changed key instead of refusing it; it exits 0 for every status, so a
+script reads `status`, not the exit code. `--expect <SHA256:…>` writes
+only if the presented key has that fingerprint — the key the operator
+verified, not whatever a second scan happens to meet. JSON fields:
+`machine`, `address`, `status` (`matching`, `changed`, `missing`),
+`key_type`, optional `current_key_type` and `current_fingerprint` (the
+pinned key), `presented_fingerprint`, `check`, `changed`, and, while the
+key is not yet trusted, `fix` (the command that trusts it, with
+`--expect`) and `verify` (a command that prints the same key's
+fingerprint on the server, to run from its own console).
 
 `rm` takes a machine out of `config.yml` and **does nothing to the server
 itself**. Asks first unless `--yes`; refuses to leave a workspace
@@ -369,10 +402,19 @@ Host acme-devmachine
 # <<< devmachine
 ```
 
-`--write` puts this block in `~/.ssh/config`, or the `--path` file, after
-asking first. **Only the text between the two markers is ever
-replaced** — the rest of the file may hold hosts devmachine knows
-nothing about.
+`--write` puts this block in the aliases' file, after asking first. **Only
+the text between the two markers is ever replaced** — the rest of the
+file may hold hosts devmachine knows nothing about.
+
+The aliases live in **one file**: `ssh_aliases_path` in `config.yml`, or
+`~/.ssh/config` when that is not set. Every writer uses it — `--write`,
+the automatic refresh after a workspace or machine changes, `setup` and
+`machines add` — and so does `doctor`'s check. `--write --path <file>`
+moves them: it writes the block there, records the file as
+`ssh_aliases_path`, and empties the block in the file they lived in
+before, because ssh keeps the first value it reads and a stale copy read
+first would win. Use it when `~/.ssh/config` is generated by something
+else and `Include`s a file of its own.
 
 - `ProxyCommand` runs [`ssh-proxy`](#ssh-proxy) when ssh connects, which
   picks the first of the machine's addresses that answers at that moment.
@@ -899,7 +941,14 @@ logins — run after `devmachine login` instead of a full sync.
 stdout is the result; the plan and machine output go to stderr.
 
 On success, `<config>/packages.lock` records what was applied, at which
-release and checksum, for the machine synced. It also refreshes
+release and checksum, for the machine synced. With `--tags`, it records only
+the packages named: every other package keeps the entry the last full sync
+left, and one that never ran stays out of the lock, so `run --package` and
+the next `sync` see what is really there. The files a package added to
+another's folder (`extends`) are recorded only for the packages named, and
+none of the old ones is forgotten, since the step that removes them did not
+run. The whole bundle is still sent, so every package's entrypoint comes from
+the pinned release. It also refreshes
 `~/.ssh/config`'s managed block, when `ssh_aliases: true` is set, and
 prints how to reach each workspace on that machine: `devmachine ssh <ws>`
 always, and `ssh <ws>-devmachine` when aliases are on.

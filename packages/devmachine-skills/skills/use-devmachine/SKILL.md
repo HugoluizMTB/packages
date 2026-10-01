@@ -39,7 +39,7 @@ back to reading files instead.
 | Get a file / folder from a workspace to this computer | `devmachine download <remote-path>... --workspace <workspace> [--to <folder>]` (default `~/Downloads`, never overwrites; a folder arrives as one `.tar.gz`) |
 | Which address / IP will be used for a machine, Tailscale or Headscale addresses | `devmachine resolve [--machine <m>]`; join a private network with `devmachine login tailscale` (Headscale: set `tailscale.login_server` first) |
 | Private access to a port (not a public site) | `devmachine tunnel <workspace> <port>` |
-| Server fingerprint / host key changed | `devmachine machines trust [name]` |
+| Server fingerprint / host key changed | `devmachine machines trust [name] --check` (says what changed, changes nothing), then `devmachine machines trust [name] --expect <fingerprint>` to pin the new key |
 | Where is my config / what's in it | `devmachine config path` / `devmachine config show` |
 | List machines / servers | `devmachine machines list` |
 | List workspaces / accounts | `devmachine workspaces list` |
