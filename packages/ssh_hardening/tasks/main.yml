@@ -26,6 +26,19 @@
       AcceptEnv TERM_PROGRAM TERM_PROGRAM_VERSION COLORTERM
   notify: Reload sshd
 
+# sshd -t refuses to parse anything without its privilege separation directory.
+# systemd makes /run/sshd only when ssh.service starts, and on a release that
+# starts sshd through ssh.socket — Ubuntu 24.04 and later — it may never have
+# started: a machine reached only through Tailscale SSH never opens the socket.
+- name: Make sshd's runtime directory, which the check needs
+  ansible.builtin.file:
+    path: /run/sshd
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  changed_when: false
+
 - name: Check the sshd config before it is reloaded
   ansible.builtin.command: sshd -t
   changed_when: false
