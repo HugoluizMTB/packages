@@ -1,13 +1,13 @@
 # essentials
 
 What almost every machine wants, in one package: base tools, git, a firewall,
-SSH with passwords kept off, and Caddy to publish sites with HTTPS. Docker is
-not included — add it with [`docker`](../docker/README.md) when you want it.
+SSH with passwords kept off, Caddy to publish sites with HTTPS, and what the
+Devmachine macOS app reads from a machine. Docker is not included — add it with [`docker`](../docker/README.md) when you want it.
 It installs nothing itself; it only pulls in the packages it needs.
 
 - **Scope:** machine
 - **Category:** Foundation
-- **Needs:** `base`, `git`, `firewall`, `ssh_hardening`, `caddy`
+- **Needs:** `base`, `git`, `firewall`, `ssh_hardening`, `caddy`, `devmachine-app`
 
 ## Settings
 
@@ -38,6 +38,11 @@ devmachine sync
 - Pulls in [`ssh_hardening`](../ssh_hardening/README.md), which turns off
   password login on every sync, same as `devmachine setup` did once at first
   contact.
+- Pulls in [`devmachine-app`](../devmachine-app/README.md), three small
+  read-only scripts the macOS app calls for sessions, health and Caddy's log.
+  It is here because the app may be installed long after the machine was set
+  up, and nobody would know to add it then. It needs CLI 0.7.1 or newer, so
+  `essentials` does too.
 - Only a pinned package release that has `essentials` gets it through
   `setup`; an older pinned release starts the machine empty and says so.
 

@@ -25,7 +25,7 @@ never seen.
 
 | Package | Scope | What it does |
 | --- | --- | --- |
-| [`essentials`](packages/essentials/README.md) | machine | base, git, firewall, ssh_hardening and caddy, in one package. |
+| [`essentials`](packages/essentials/README.md) | machine | base, git, firewall, ssh_hardening, caddy and devmachine-app, in one package. |
 | [`base`](packages/base/README.md) | machine | The base tools, a shared tmux config, and the `resume` session picker. |
 | [`git`](packages/git/README.md) | machine | Installs git. |
 | [`docker`](packages/docker/README.md) | machine | Docker Engine and the Compose plugin, from Docker's own repository. |

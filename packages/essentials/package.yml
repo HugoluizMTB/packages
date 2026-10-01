@@ -4,10 +4,11 @@ scope: machine
 category: Foundation
 summary: >-
   What almost every machine wants, in one package: base tools, git, a firewall,
-  SSH with passwords kept off, and Caddy to publish sites with HTTPS. Docker is
-  not included; add it with the docker package when you want it.
+  SSH with passwords kept off, Caddy to publish sites with HTTPS, and what the
+  Devmachine macOS app reads from a machine. Docker is not included; add it with
+  the docker package when you want it.
 
 requires:
-  cli: ">= 0.2.0"
+  cli: ">= 0.7.1"
 
-needs: [base, git, firewall, ssh_hardening, caddy]
+needs: [base, git, firewall, ssh_hardening, caddy, devmachine-app]

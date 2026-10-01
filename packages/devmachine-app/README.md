@@ -19,6 +19,10 @@ None.
 
 ## Add it
 
+`devmachine setup` gives a new machine [`essentials`](../essentials/README.md),
+which pulls this package in. Add it by hand only to a machine set up without
+`essentials`, or before it carried this package:
+
 ```bash
 devmachine packages add devmachine-app --machine main
 devmachine sync
