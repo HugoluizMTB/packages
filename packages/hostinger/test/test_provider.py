@@ -29,6 +29,7 @@ class FakeHostinger(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        self.server.user_agents.append(self.headers.get("User-Agent"))
         self.server.requests.append(("GET", self.path, None))
         if self.path.startswith("/api/domains/v1/portfolio"):
             self._reply(200, self.server.portfolio)
@@ -79,6 +80,7 @@ class FakeServer(HTTPServer):
         super().__init__(*args, **kwargs)
         self.zone = []
         self.requests = []
+        self.user_agents = []
         self.not_found = False
         self.rate_limited = False
         self.portfolio = []
@@ -266,6 +268,15 @@ class ProviderTest(unittest.TestCase):
         self.assertEqual(len(deletes), 1)
         puts = [r for r in self.server.requests if r[0] == "PUT"]
         self.assertEqual(puts, [])
+
+    def test_every_call_names_itself_instead_of_pythons_default_agent(self):
+        self.server.zone = []
+        result = self.run_provider(["list", "example.com"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.server.user_agents)
+        for agent in self.server.user_agents:
+            self.assertFalse(agent.startswith("Python-urllib"), agent)
+            self.assertTrue(agent.startswith("devmachine-hostinger"), agent)
 
     def test_a_404_is_reported_as_zone_not_found(self):
         self.server.not_found = True

@@ -59,6 +59,9 @@ def call(method, path, body=None):
     request = urllib.request.Request(url, data=data, method=method)
     request.add_header("Authorization", "Bearer " + token())
     request.add_header("Content-Type", "application/json")
+    # Hostinger's firewall answers Python-urllib's default User-Agent with a
+    # 403, the same status a token without DNS access gets.
+    request.add_header("User-Agent", "devmachine-hostinger")
     try:
         with urllib.request.urlopen(request) as response:
             raw = response.read()
