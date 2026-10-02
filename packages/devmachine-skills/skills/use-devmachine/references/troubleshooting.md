@@ -73,6 +73,43 @@ or the key is the problem.
 **What to do:** Either set `key:` on the server to a private key, or start an
 SSH agent and load one.
 
+## `machines add`: "the key does not log in yet and no password was given"
+
+**What it means:** `machines add --address …` asks nothing, so it had no
+way to get the server's password, and the key it chose is not in the
+admin's `authorized_keys` yet. A server just bought usually takes only a
+password. Nothing was changed, and nothing was written to `config.yml`.
+
+**What to do:** Give the password on stdin, so it never appears in the
+command line or the shell history:
+
+```
+printf '%s' "$PASSWORD" | devmachine machines add … --password-stdin
+```
+
+Or put the key's public half (`<key>.pub`) in the admin's
+`authorized_keys` through the provider's console, and run the same
+command again.
+
+## `create-local --add`: "the local machine … is running, and was not added"
+
+**What it means:** The VM was created and is running, but adding it
+failed — the error after the colon says which step. Nothing was written
+to `config.yml`, so nothing points at a half-added machine.
+
+**What to do:** Fix the cause, then run the command the error ends with.
+It is the whole `machines add` for the running VM — name, address, port,
+the host key's fingerprint, the public password on stdin, and the flags
+you gave — ready to copy:
+
+```
+printf '%s' devmachine | devmachine machines add --name sandbox --address 127.0.0.1 \
+  --port 60022 --fingerprint SHA256:… --password-stdin
+```
+
+Or throw the VM away with `devmachine machines delete-local <name>` and
+run `create-local --add` again.
+
 ## It used to connect, and now it does not
 
 **What it means:** If you recently added keys to your SSH agent, that is very
@@ -325,6 +362,18 @@ If your variable is there under a different name than the package's own
 `defaults/main.yml` uses, the package needs fixing — the name in its defaults
 is the name a setting has to match.
 
+## `machines edit` or `workspaces edit` says it "does not install the package"
+
+**What it means:** The setting's first part, before the dot, names a
+package that machine or workspace does not have. Nothing would read the
+value: the recipe would keep its default, so the CLI refuses it instead.
+It is usually a typo in the package name, or a package added to the
+workspace when the setting is on the machine (or the other way round).
+
+**What to do:** Check the name with `devmachine packages list`. If the
+package really is missing, add it first (`devmachine packages add <name>
+--machine main`), then set the value.
+
 ## `devmachine ssh` opens a session as the wrong user
 
 **What it means:** `devmachine ssh` with no argument logs you in as the
@@ -446,6 +495,13 @@ Two more lines that are not errors, but change what a command does:
   have installed recognized this domain. This is normal for a registrar with
   no devmachine package yet: the command falls back to `manual` and prints
   the record for you to create by hand.
+- **"no DNS provider is installed"** — the machine has no DNS provider
+  package at all, so the record is printed. `devmachine packages list`
+  shows the providers you can add.
+- **"… could not be reached, so no DNS provider on it was asked"** — a
+  provider runs on the machine, so with the machine down nothing can be
+  written or removed, and the record is printed instead. Once the machine
+  answers, `devmachine dns add` or `devmachine dns rm` does it for you.
 - **"the provider failed"**, with something that looks like a crash — this is
   a bug in the provider package, not in devmachine itself. The package sent
   back something that does not match the [DNS provider
@@ -461,8 +517,8 @@ record by hand.
 
 **What to do:** `devmachine packages pin v26` (or later) and
 `devmachine sync --tags hostinger`. A token without "Domains portfolio"
-permission also needs the zones listed: `hostinger.zones: [example.com]` in
-the machine's settings.
+permission also needs the zones listed: `devmachine machines edit main
+--set hostinger.zones=[example.com]`.
 
 ## `expose add` said "the DNS record for … was not written"
 
@@ -472,6 +528,29 @@ cannot find the site and Caddy cannot get its certificate.
 
 **What to do:** Create the record the command printed, or fix the provider
 (see the table above) and run `devmachine dns add <name> A <address>`.
+
+## `expose rm` or `workspaces destroy` said "the DNS record for … was not removed"
+
+**What it means:** The site is off Caddy, but the record that pointed
+the name at the machine is still there: the DNS provider could not list
+the zone, refused the delete, or its setup is broken; no DNS provider
+is installed, or the machine could not be reached to ask one; or the
+name also points at another address, and taking one value out of
+several is left to you. The reason is on the same line. The name still resolves, and visitors get a TLS error
+instead of nothing.
+
+**What to do:** Remove the record the command printed, or fix the
+provider (see the table above) and run
+`devmachine dns rm <name> A <address>`.
+
+## `expose rm` or `workspaces destroy` says a name "points at …, not at …: its DNS record is left alone"
+
+**What it means:** The name's A record no longer holds the serving
+machine's address, so `expose rm` did not touch it. Somebody repointed
+the name after `expose add`, maybe at a new server.
+
+**What to do:** Nothing, if the new value is right. If the name should
+go, remove it with `devmachine dns rm <name> A <value>`.
 
 ## A certificate never arrives after `expose add`
 

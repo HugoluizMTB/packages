@@ -68,6 +68,40 @@ there.
 Run again with a configuration in place, and it just makes sure Ansible
 is installed — it never rewrites `config.yml`, a key, or SSH settings.
 
+**Without a terminal.** `setup` only asks. A script, an agent or an app
+runs `machines add --address …` instead: with no `config.yml` yet it
+writes the same configuration `setup` would — the latest packages
+release pinned, `defaults.workspace`, the machine with `essentials`, and
+`AGENTS.md` — and runs the same bootstrap. Each question has a flag:
+
+| `setup` asks | `machines add` flag |
+| --- | --- |
+| machine name | `--name` |
+| address | `--address` |
+| admin login | `--user` |
+| SSH port | `--port` |
+| domain | `--domain` (only when it writes a new `config.yml`) |
+| trust this fingerprint? | `--fingerprint` (read it first with `machines scan`) |
+| how to log in | `--key new`, `--key <file>` or `--key agent:<SHA256:…>` |
+| the password | `--password-stdin` |
+| write SSH host entries? | yes, unless `--no-aliases` |
+| reach it over Tailscale? | `--tailscale` |
+| install the agent skills? | run `devmachine skills add` afterwards |
+
+It creates that file only if it is still missing when the bootstrap
+ends. If another `add` (or `create-local --add`) wrote one in the
+meantime, this machine is added to it instead of overwriting it; a
+`--domain` given then is not written, and the output says so.
+
+Only `--address` does this. `machines add` with questions and no
+`config.yml` stops and sends you to `setup`, which asks the same
+questions plus the domain.
+
+Unlike `setup`, it writes `config.yml` only once the bootstrap worked, so
+a run that fails leaves no configuration behind. Workspaces then come
+from `devmachine workspaces new`, and packages from `devmachine packages
+add`, both without questions when given `--yes`.
+
 **On a self machine** (`self: true`, your own computer — see
 [`machines`](#machines)), setup only checks Homebrew and installs Ansible;
 no fingerprint, key or password involved.
@@ -210,16 +244,22 @@ devmachine config show      machines, workspaces and their effective values
 Shows where your configuration lives and what is in it. `show` validates
 as it prints, so it is the quickest way to find what is wrong.
 
+With no `config.yml` yet, `show` is not an error: it says there is no
+configuration, and `--format json` prints `{"machines": [], "workspaces":
+[]}`. `machines` and `workspaces` are always arrays, never `null`.
+
 ## machines
 
 ```
 devmachine machines list                  each machine, its addresses, port and workspaces
 devmachine machines add [--no-harden] [--no-essentials] [--no-aliases] [--yes]   set up another server and record it
 devmachine machines add --self <name>     add your computer as a machine, with no address
-devmachine machines add --name <n> --address <a> --fingerprint <SHA256:…> [--user u] [--port p] [--key new|file] [--tailscale]   the same, asking nothing
+devmachine machines add --name <n> --address <a> --fingerprint <SHA256:…> [--user u] [--port p] [--key new|file|agent:<SHA256:…>] [--password-stdin] [--tailscale]   the same, asking nothing
 devmachine machines trust [name] [--check] [--replace] [--expect <fp>] [--yes]   check or update its SSH fingerprint
+devmachine machines scan --address <a> [--port p]   the SSH fingerprint of a server not added yet; writes nothing
+devmachine machines edit <name> [--set k=v] [--unset k] [--check] [--yes]   change a machine's package settings
 devmachine machines rm <name> [--yes]     forget a machine; the server keeps running
-devmachine machines create-local <name>   a machine on your computer
+devmachine machines create-local <name> [--add [--key k] [--no-essentials] [--no-aliases]]   a machine on your computer
 devmachine machines start <name>          start a local machine
 devmachine machines stop <name>           stop a local machine
 devmachine machines delete-local <name> [--yes]   destroy it and everything on it
@@ -227,11 +267,24 @@ devmachine machines delete-local <name> [--yes]   destroy it and everything on i
 
 Manages the list of machines devmachine knows about.
 
+With no `config.yml` yet, `list` is not an error: it says how to add the
+first machine, and `--format json` prints `[]`.
+
 `list --format json` prints each machine with `name`, `hosts`,
-`admin_user`, `port`, `key`, `agent_key`, `workspaces`, and `self: true`
-on your own computer. **Your computer is never picked by default** — a
+`admin_user`, `port`, `key`, `agent_key`, `workspaces`, `packages` (the
+machine's own package list from `config.yml`, `[]` when it has none), and
+`self: true` on your own computer. `config show --format json` carries the
+same machine entries. **Your computer is never picked by default** — a
 command with no `--machine` still acts on the server, even with a self
 machine also configured.
+
+`edit` changes a machine's `settings:` and nothing else, the way
+`workspaces edit` does for a workspace. `--set <package>.<name>=<value>`
+writes a package option, read as YAML (`--set
+hostinger.zones=[example.com]` writes a list); an empty value or `--unset
+<package>.<name>` removes it. Both repeat. A setting for a package the
+machine does not install is refused. Comments in `config.yml` survive, and
+`sync` applies the change.
 
 `add` sets up another server, same as [setup](#setup) — including the SSH
 aliases and Tailscale questions. `add --self <name>` instead names the
@@ -240,9 +293,15 @@ is asked. Refuses if a self machine already exists, or the name is taken.
 See [your computer as a machine](https://mydevmachine.sh/how-it-works/your-computer-as-a-machine/)
 for how this differs from `machines create-local`.
 
+`add` writes the machine to `config.yml` only once the key is proved and
+the bootstrap finished. A run that fails leaves `config.yml` untouched,
+so the same command can simply run again — see [`machines add` writes the
+machine last](https://mydevmachine.sh/how-it-works/trust-bootstrap/#machines-add-writes-the-machine-last).
+
 **Unattended.** `--address` makes `add` ask nothing, so a script or an
 agent adds a machine in one command; every question has a flag, and what
-is left out takes its default:
+is left out takes its default. With no `config.yml` yet, it writes a new
+one the way `setup` does — see [setup without a terminal](#setup):
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -250,18 +309,45 @@ is left out takes its default:
 | `--address` | — | an IP, a hostname, or `tailscale:<name>` |
 | `--user` | `root` | the admin login: root, or an account with passwordless sudo |
 | `--port` | `22` | the SSH port |
-| `--key` | `new` | a key of the CLI's own for this machine (made, or reused when it exists), or a private key file |
+| `--key` | `new` | a key of the CLI's own for this machine (made, or reused when it exists), a private key file, or `agent:<SHA256:…>` for a key your SSH agent holds |
 | `--fingerprint` | — | the host key to trust on first contact |
 | `--tailscale` | off | also add the `tailscale` package |
+| `--domain` | — | the domain; only when there is no `config.yml` yet, and refused otherwise |
+| `--password-stdin` | off | read the admin password from stdin, for a server that takes nothing else yet |
+
+`--key agent:SHA256:…` picks one key from the SSH agent by its
+fingerprint (`ssh-add -l` lists them), the way choosing an agent key does
+in the questions: its public half is recorded as `agent_key:`, and only
+that key is offered from then on. If the agent does not hold it — a
+locked password manager, another `SSH_AUTH_SOCK` — `add` stops before
+changing anything and lists the fingerprints the agent does hold.
 
 SSH aliases are written unless `--no-aliases`. `--fingerprint` is required
 for a machine not trusted yet: with nobody to ask, trusting whatever
 answers would be trust on first use with no one looking. Without it, or
 with a different one, `add` stops before changing anything and prints the
 fingerprint it was shown, to check through the provider console or a
-connection you already trust. A key that does not log in yet stops it
-too: there is no password to ask for, so put the key's public half in the
-admin's `authorized_keys` first, or run `add` without flags.
+connection you already trust. `machines scan --address <a>` shows the
+same fingerprint before you run `add` at all.
+
+A key that does not log in yet needs the password once, to install it.
+With nobody to ask, it comes on stdin: `--password-stdin` reads all of
+stdin as the password (only the final line ending is dropped), so it is
+never in the command line, the shell history or a log:
+
+```
+printf '%s' "$PASSWORD" | devmachine machines add --name box --address 203.0.113.20 \
+  --fingerprint SHA256:… --password-stdin
+```
+
+It is used exactly as the interactive password is: one connection that
+installs the key, then a new connection that proves the key alone, then
+password login is turned off (unless `--no-harden`). It is written
+nowhere. When the key already logs in, the password is never used.
+Without `--password-stdin`, a key that does not log in stops `add` and
+says so; put the key's public half in the admin's `authorized_keys`
+first, or pass the password. `--password-stdin` needs `--address`:
+without it, stdin carries the answers to the questions instead.
 
 Adding or removing a machine, like adding or removing a workspace, refreshes
 the SSH aliases when `ssh_aliases: true` is set — see
@@ -286,6 +372,17 @@ key is not yet trusted, `fix` (the command that trusts it, with
 `--expect`) and `verify` (a command that prints the same key's
 fingerprint on the server, to run from its own console).
 
+`scan` reads the host key a server presents, for an address that is not
+a machine yet — the step before `add --fingerprint`, so a person (or an
+app) can compare it with the provider console before anything trusts it.
+It does not log in, trusts nothing and writes nothing, and it needs no
+`config.yml`. It reports the key the server offers for the same
+negotiation `add` makes, so its fingerprint is the one `add` compares
+against. JSON fields: `address` (the one that answered), `port`,
+`key_type`, `fingerprint`, and `verify` — a command that prints the same
+key's fingerprint on the server, to run from its own console (left out
+for a key type with no standard file).
+
 `rm` takes a machine out of `config.yml` and **does nothing to the server
 itself**. Asks first unless `--yes`; refuses to leave a workspace
 pointing at a gone machine. **Not `delete-local`**: `rm` only forgets a
@@ -294,7 +391,23 @@ server, `delete-local` erases a machine on your computer.
 `create-local` builds a machine on your computer, arriving password-only
 like a bought server — `devmachine setup` still has to run against it.
 Root password `devmachine`, public on purpose: this VM holds no real
-data. `start`, `stop` and `delete-local` only act on a local machine.
+data.
+
+`create-local <name> --add` does both steps at once: it creates the VM,
+then adds it the way `machines add --address` adds a server — installs a
+key with that password, proves the key, turns password login off,
+installs Ansible, and writes the machine (and, with no `config.yml` yet,
+a new configuration). No second command, and no question. Its host key
+is trusted as it answers, without `--fingerprint`: the command made the
+VM a moment ago and it answers only on this computer's loopback. `--key`,
+`--no-essentials` and `--no-aliases` mean what they mean for `machines
+add`, and are refused without `--add`. The name is checked against the
+configuration before any VM is made. If adding fails, the VM keeps
+running and nothing is written; the error ends with the exact `machines
+add` command that adds it by hand, ready to copy. The host key is read
+once, and that same key is the one trusted.
+`--format json` prints the machine as `machines list` does, with its
+`key` once added; the progress goes to stderr. `start`, `stop` and `delete-local` only act on a local machine.
 
 Two limits: needs [Lima](https://lima-vm.io) (`brew install lima`), macOS
 and Linux only; not reachable from the internet, so `dns`, HTTPS and
@@ -305,10 +418,10 @@ subdomains do not work on it.
 ```
 devmachine workspaces list
 devmachine workspaces new <name> [--machine m] [--like w] [--packages a,b] [--user u] [--check] [--yes]
-devmachine workspaces edit <name> [--machine m] [--user u] [--add p] [--rm p] [--set k=v] [--check] [--yes]
+devmachine workspaces edit <name> [--machine m] [--user u] [--add p] [--rm p] [--set k=v] [--unset k] [--share c=machine|own] [--check] [--yes]
 devmachine workspaces defaults [--add p] [--rm p] [--check] [--yes]
 devmachine workspaces rm <name> [--yes]
-devmachine workspaces destroy <name> [--confirm <name>] [--check]
+devmachine workspaces destroy <name> [--confirm <name>] [--check] [--keep-dns]
 ```
 
 A workspace is one Linux account on one machine. See
@@ -329,7 +442,7 @@ machines, pass `--machine`.
 `edit` changes one workspace. `--add`/`--rm` take a package name each,
 repeatable. `--set <package>.<name>=<value>` writes a package option
 (read as YAML — see [packages](concepts/packages.md)); an empty value
-removes it. `--share <credential>=own` keeps this workspace's own login
+or `--unset <package>.<name>` removes it. `--share <credential>=own` keeps this workspace's own login
 instead of the shared one; `=machine` shares it again. A package option
 for a package the workspace does not install is refused.
 
@@ -345,8 +458,16 @@ it changed. See [SSH aliases](https://mydevmachine.sh/concepts/reaching-your-ser
 
 **`destroy` deletes for real**: the account, its home, its Caddy routes,
 and its `config.yml` entry. Asks you to retype the name first (or
-`--confirm <name>` from a script); DNS records are left alone. Needs the
-machine reachable; use `rm` for one that is gone.
+`--confirm <name>` from a script). Needs the machine reachable; use `rm`
+for one that is gone. After the account is gone, the DNS record of each
+of its sites goes too, with the same rules as `expose rm`: only an A
+record that still points at the machine serving the site (the `via`
+machine for one published through it), through the provider that holds
+the zone. Anything else is printed, and a DNS failure never stops the
+destroy. `--check` also prints those DNS removals. The list it shows
+before asking names each record it would remove; `--keep-dns` leaves
+every one alone instead, and prints the `dns rm` that removes each
+later.
 
 `defaults` only changes `defaults.workspace`, which new workspaces
 inherit; existing ones are unchanged.
@@ -666,7 +787,7 @@ only you should reach, uses [`devmachine tunnel`](#tunnel) instead.
 ```
 devmachine expose add <workspace> <port> --host <host> [--via <machine>] [--check] [--publish] [--no-apply]
 devmachine expose list
-devmachine expose rm <host> [--check] [--yes] [--no-apply]
+devmachine expose rm <host> [--check] [--yes] [--no-apply] [--keep-dns]
 ```
 
 Publishes a workspace's port to the internet, over HTTPS, at a hostname
@@ -725,7 +846,40 @@ it (or removed, with no route left) and Caddy reloads. With the machine
 out of reach it keeps serving the site until the next `sync`.
 `--no-apply` and `--check` work as for `add`; in JSON, `status` is
 `removed` or `pending`. A host the configuration does not know is
-refused, with how to adopt or remove it by hand. See
+refused, with how to adopt or remove it by hand.
+
+After Caddy, `rm` removes the A record `add` created — through the
+provider that holds the zone, and only while its value is still the
+serving machine's address (the `via` machine for a site published
+through one):
+
+- A record that points somewhere else now is left alone, and the command
+  says where it points. Somebody repointed the name; deleting it would
+  take down whatever answers there.
+- With no provider installed, or the machine out of reach, it prints the
+  record to remove by hand, and the JSON carries `dns_error` saying so —
+  the record is still there.
+- A name that holds the machine's address **and** another value is not
+  deleted through the provider: some providers take one value out by
+  rewriting the whole set, and a failure halfway would take the other
+  value down too. The record to remove by hand is printed, and the JSON
+  carries `dns_error`.
+- When the provider cannot list the zone or refuses the delete, nothing
+  is deleted, the site still comes off Caddy, the record to remove by
+  hand is printed, and the JSON carries `dns_error`.
+- The question it asks says so: "Stop publishing https://<host>, and
+  remove its DNS record while it points at <machine>?".
+- `--keep-dns` takes the site off Caddy and leaves the record alone, for
+  a name you will point somewhere else yourself. It prints the `devmachine
+  dns rm … --machine <machine>` that removes it later, and the question
+  no longer mentions DNS.
+- `--check` also prints the DNS removal it would make.
+- `--no-apply` touches no machine, so no DNS either: it prints the
+  `devmachine dns rm <host> A <address> --machine <serving machine>` to
+  run later — `--machine` names the machine whose DNS provider holds the
+  zone, which is the serving one, not necessarily the only one. (`add --no-apply`
+  still points the name, since a name that does not resolve yet stops
+  the certificate on the next `sync`.) See
 [Publishing](concepts/publishing.md) for the cases this question
 exists to catch.
 
@@ -923,6 +1077,46 @@ package format](https://mydevmachine.sh/reference/package-format/).
 
 `list` shows each package once with every machine and workspace that
 uses it; one nothing provides is listed as `missing`.
+
+`list --format json` prints `{"release": "v17", "packages": [...]}`:
+`release` is the packages release the list was read from (empty when
+nothing is pinned, so only your own packages are listed), and one entry
+per package:
+
+```json
+{
+  "name": "hostinger",
+  "scope": "machine",
+  "source": "release",
+  "summary": "DNS zones on Hostinger.",
+  "category": "DNS",
+  "kind": "dns",
+  "platforms": [],
+  "needs": [],
+  "credentials": [
+    {"name": "hostinger", "kind": "secret", "scope": "machine", "env": "HOSTINGER_API_TOKEN"}
+  ],
+  "installed_on": ["machine main"]
+}
+```
+
+`kind` is the contract a callable package answers — `dns` marks a
+[DNS provider](https://mydevmachine.sh/how-it-works/dns-providers/) — and is left out for an
+ordinary package. `platforms` are the operating systems it runs on
+(`linux`, `macos`), and `[]` means any — a package that says `["macos"]`
+is for your own computer, never for a server. `needs` are the packages
+it brings in before itself, `[]` when none: for `essentials` that is the
+list it is made of. `category` is the manifest's grouping, left out when it
+has none. `credentials` lists what the package declares, always an array:
+each one's `name`, `kind` (`secret`, `file` or `manual`), `scope`, and
+`env` or `path` where the value is delivered. **It never carries a
+value** — it is there so a client knows the name to store with `secrets
+set` before the package is added. `installed_on` is `[]` when nothing
+uses the package.
+
+With no `config.yml` yet, `list` reads the **latest** packages release —
+the one `setup` would pin — so a new user sees what a first machine can
+start with. With no network to find it, it fails and says so.
 
 `add`/`rm` only edit `config.yml` — `sync` applies the change. Pass
 `--machine` or `--workspace`; with one configured machine, that is the
