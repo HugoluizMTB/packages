@@ -1,0 +1,4 @@
+---
+devmachine_kimi_code_packages:
+  - curl
+  - tar

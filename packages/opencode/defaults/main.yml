@@ -1,0 +1,2 @@
+---
+devmachine_opencode_home: "/home/{{ devmachine_workspace.user }}"

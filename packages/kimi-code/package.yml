@@ -1,0 +1,28 @@
+format: 1
+name: kimi-code
+scope: workspace
+category: Coding agents
+summary: >-
+  Moonshot AI's Kimi Code CLI (`kimi`) for one account. Logging in is a
+  person's job, once, in each account.
+
+needs: [workspace]
+
+requires:
+  cli: ">= 0.4.0"
+
+credentials:
+  # scope: workspace because accounts usually differ between workspaces.
+  # shareable: false because the session is a directory of tokens rather than
+  # one file, and only a file can be shared.
+  - name: kimi
+    kind: manual
+    scope: workspace
+    shareable: false
+    command: kimi login
+    stored_at: ~/.kimi-code/credentials
+
+variables:
+  home:
+    summary: Where the account's home is.
+    default: /home/<the account>

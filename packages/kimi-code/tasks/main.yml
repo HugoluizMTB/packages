@@ -1,0 +1,38 @@
+---
+- name: Load the package names for this family
+  ansible.builtin.include_vars: "{{ ansible_facts['os_family'] }}.yml"
+
+- name: Install what the installer downloads with
+  ansible.builtin.package:
+    name: "{{ devmachine_kimi_code_packages }}"
+    state: present
+
+# A dry run on a machine where this account does not exist yet cannot become
+# it: Ansible has no user to hand its temporary files to, and fails saying so.
+- name: Look for the account
+  ansible.builtin.stat:
+    path: "{{ devmachine_kimi_code_home }}"
+  register: devmachine_kimi_code_account
+  check_mode: false
+
+# KIMI_NO_MODIFY_PATH: the PATH line goes to .zshenv below, where every zsh
+# reads it, rather than to whichever startup file the installer guesses.
+- name: Install the Kimi Code CLI
+  become: true
+  become_user: "{{ devmachine_workspace.user }}"
+  environment:
+    HOME: "{{ devmachine_kimi_code_home }}"
+    KIMI_NO_MODIFY_PATH: "1"
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
+    creates: "{{ devmachine_kimi_code_home }}/.kimi-code/bin/kimi"
+  when: not ansible_check_mode or devmachine_kimi_code_account.stat.exists
+
+- name: Put kimi on the PATH
+  ansible.builtin.lineinfile:
+    path: "{{ devmachine_kimi_code_home }}/.zshenv"
+    line: 'export PATH="$HOME/.kimi-code/bin:$PATH"'
+    create: true
+    owner: "{{ devmachine_workspace.user }}"
+    group: "{{ devmachine_workspace.user }}"
+    mode: "0644"

@@ -1,0 +1,32 @@
+---
+# A dry run on a machine where this account does not exist yet cannot become
+# it: Ansible has no user to hand its temporary files to, and fails saying so.
+- name: Look for the account
+  ansible.builtin.stat:
+    path: "{{ devmachine_cline_home }}"
+  register: devmachine_cline_account
+  check_mode: false
+
+# Cline ships only through npm. The prefix is the account's ~/.local and not
+# the global directory of the Node mise manages, so a Node upgrade does not
+# take cline away with the old version's directory.
+- name: Install the Cline CLI
+  become: true
+  become_user: "{{ devmachine_workspace.user }}"
+  environment:
+    HOME: "{{ devmachine_cline_home }}"
+  ansible.builtin.command:
+    cmd: >-
+      {{ devmachine_cline_home }}/.local/share/mise/shims/npm install
+      --global --prefix {{ devmachine_cline_home }}/.local cline
+    creates: "{{ devmachine_cline_home }}/.local/bin/cline"
+  when: not ansible_check_mode or devmachine_cline_account.stat.exists
+
+- name: Put the account's own tools on the PATH
+  ansible.builtin.lineinfile:
+    path: "{{ devmachine_cline_home }}/.zshenv"
+    line: 'export PATH="$HOME/.local/bin:$PATH"'
+    create: true
+    owner: "{{ devmachine_workspace.user }}"
+    group: "{{ devmachine_workspace.user }}"
+    mode: "0644"

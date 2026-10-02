@@ -1,0 +1,29 @@
+format: 1
+name: opencode
+scope: workspace
+category: Coding agents
+summary: >-
+  The opencode CLI for one account. It runs without a login on opencode's own
+  free models; logging in to another provider is a person's job, once, in
+  each account.
+
+needs: [workspace]
+
+requires:
+  cli: ">= 0.4.0"
+
+credentials:
+  # scope: workspace because provider accounts usually differ between
+  # workspaces. shareable: true because auth.json is keys and tokens in a
+  # file: a copy of it works on another account.
+  - name: opencode
+    kind: manual
+    scope: workspace
+    shareable: true
+    command: opencode auth login
+    stored_at: ~/.local/share/opencode/auth.json
+
+variables:
+  home:
+    summary: Where the account's home is.
+    default: /home/<the account>

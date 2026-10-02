@@ -1,0 +1,29 @@
+format: 1
+name: antigravity
+scope: workspace
+category: Coding agents
+summary: >-
+  Google's Antigravity CLI (`agy`) for one account. Logging in is a person's
+  job, once, in each account.
+
+needs: [workspace]
+
+requires:
+  cli: ">= 0.4.0"
+
+credentials:
+  # scope: workspace because the Google account usually differs between
+  # workspaces. stored_at is the token file third-party tools report for a
+  # machine without a keyring; Google does not document it, so doctor may call
+  # a working login missing.
+  - name: antigravity
+    kind: manual
+    scope: workspace
+    shareable: true
+    command: agy
+    stored_at: ~/.gemini/antigravity-cli/antigravity-oauth-token
+
+variables:
+  home:
+    summary: Where the account's home is.
+    default: /home/<the account>

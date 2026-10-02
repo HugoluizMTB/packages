@@ -1,0 +1,37 @@
+---
+- name: Load the package names for this family
+  ansible.builtin.include_vars: "{{ ansible_facts['os_family'] }}.yml"
+
+- name: Install what the installer downloads with
+  ansible.builtin.package:
+    name: "{{ devmachine_opencode_packages }}"
+    state: present
+
+# A dry run on a machine where this account does not exist yet cannot become
+# it: Ansible has no user to hand its temporary files to, and fails saying so.
+- name: Look for the account
+  ansible.builtin.stat:
+    path: "{{ devmachine_opencode_home }}"
+  register: devmachine_opencode_account
+  check_mode: false
+
+# --no-modify-path: the PATH line goes to .zshenv below, where every zsh reads
+# it, rather than to whichever startup file the installer guesses.
+- name: Install the opencode CLI
+  become: true
+  become_user: "{{ devmachine_workspace.user }}"
+  environment:
+    HOME: "{{ devmachine_opencode_home }}"
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path
+    creates: "{{ devmachine_opencode_home }}/.opencode/bin/opencode"
+  when: not ansible_check_mode or devmachine_opencode_account.stat.exists
+
+- name: Put opencode on the PATH
+  ansible.builtin.lineinfile:
+    path: "{{ devmachine_opencode_home }}/.zshenv"
+    line: 'export PATH="$HOME/.opencode/bin:$PATH"'
+    create: true
+    owner: "{{ devmachine_workspace.user }}"
+    group: "{{ devmachine_workspace.user }}"
+    mode: "0644"

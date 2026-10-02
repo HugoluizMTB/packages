@@ -1,0 +1,2 @@
+---
+devmachine_kimi_code_home: "/home/{{ devmachine_workspace.user }}"

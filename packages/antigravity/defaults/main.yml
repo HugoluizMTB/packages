@@ -1,0 +1,2 @@
+---
+devmachine_antigravity_home: "/home/{{ devmachine_workspace.user }}"
