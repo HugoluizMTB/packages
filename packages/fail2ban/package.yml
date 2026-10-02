@@ -1,6 +1,7 @@
 format: 1
 name: fail2ban
 scope: machine
+platforms: [linux]
 category: Security
 summary: fail2ban, with a jail for sshd.
 

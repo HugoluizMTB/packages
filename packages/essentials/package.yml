@@ -1,6 +1,7 @@
 format: 1
 name: essentials
 scope: machine
+platforms: [linux]
 category: Foundation
 summary: >-
   What almost every machine wants, in one package: base tools, git, a firewall,

@@ -1,6 +1,7 @@
 format: 1
 name: ssh_hardening
 scope: machine
+platforms: [linux]
 category: Security
 summary: >-
   Turns off password authentication for good. `setup` does this once, at first

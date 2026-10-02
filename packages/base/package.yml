@@ -1,6 +1,7 @@
 format: 1
 name: base
 scope: machine
+platforms: [linux]
 category: Foundation
 summary: The base tools a development machine needs, plus a shared tmux config and a session picker.
 

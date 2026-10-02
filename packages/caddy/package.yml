@@ -1,6 +1,7 @@
 format: 1
 name: caddy
 scope: machine
+platforms: [linux]
 category: Web
 summary: >-
   A reverse proxy that gets its own certificates, and a one-page site that
