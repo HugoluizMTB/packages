@@ -82,6 +82,10 @@
       # the key as always — `alternate_on` is what decides.
       bind -n PPage if-shell -F '#{alternate_on}' 'send-keys PPage' 'copy-mode -eu'
       bind -n NPage if-shell -F '#{alternate_on}' 'send-keys NPage' 'send-keys NPage'
+      # tmux's own wheel-up enters copy mode without scrolling, so one stray
+      # wheel-up left a screen that looked the same, stopped updating and sent
+      # every key to copy mode. Scrolling on the same event makes it visible.
+      bind -n WheelUpPane if-shell -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send-keys -M' 'copy-mode -e; send-keys -X -N 5 scroll-up'
 
 - name: Install the `resume` command (a tmux session picker)
   ansible.builtin.copy:

@@ -66,6 +66,14 @@ class CopyMode(unittest.TestCase):
         self.assertIn("set -g mode-style 'bg=#00a6b2'", self.text)
 
 
+class WheelUp(unittest.TestCase):
+    def test_the_first_wheel_up_scrolls_instead_of_entering_copy_mode_in_place(self):
+        self.assertIn(
+            "bind -n WheelUpPane if-shell -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' "
+            "'send-keys -M' 'copy-mode -e; send-keys -X -N 5 scroll-up'",
+            system_conf())
+
+
 @unittest.skipUnless(shutil.which("tmux"), "tmux is not installed")
 class LoadsInTmux(unittest.TestCase):
     def tmux(self, conf, *args):
@@ -87,6 +95,11 @@ class LoadsInTmux(unittest.TestCase):
         self.assertIn("52;c%p1%s;%p2%s", overrides)
         keys = self.tmux(conf, "list-keys", "-T", "copy-mode-vi")
         self.assertRegex(keys, r"MouseDragEnd1Pane\s+send-keys -X copy-pipe-and-cancel\n")
+
+    def test_wheel_up_binding_loads(self):
+        keys = self.tmux(system_conf() + read(ACCOUNT_CONF), "list-keys", "-T", "root", "WheelUpPane")
+        self.assertIn("copy-mode -e", keys)
+        self.assertIn("send-keys -X -N 5 scroll-up", keys)
 
 
 if __name__ == "__main__":
