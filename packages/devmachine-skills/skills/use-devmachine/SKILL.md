@@ -5,6 +5,28 @@ description: "Use when running, inspecting, or troubleshooting the Devmachine CL
 
 # Use Devmachine
 
+## Machines: only through devmachine
+
+- Create and change every machine with a devmachine command. A machine
+  exists for devmachine only once it is in its configuration: check with
+  `devmachine machines list`. Never create, provision or configure a machine
+  by hand (`limactl`, `multipass`, raw `ssh`, editing `config.yml`) when a
+  devmachine command does it. A machine made by hand is invisible to
+  devmachine and to the app.
+- A machine on this computer ("a local machine", "a Lima VM"):
+  `devmachine machines create-local <name> --add`. It needs Lima; if
+  `limactl` is missing, install it with `brew install lima`. `--add` gives
+  it the essentials (including `devmachine-app`); then run
+  `devmachine sync --machine <name> --yes` to apply them.
+- A server: run `devmachine machines scan --address <address>` and show the
+  fingerprint to the person to compare with the provider's console. Then
+  `devmachine machines add --address <address> --name <name> --fingerprint
+  SHA256:… [--key agent:SHA256:…]`.
+- Your shell has no terminal, so a command that asks a question waits
+  forever. Always pass the non-interactive flags, such as `--yes`, and
+  `devmachine skills add --agent <harness> --yes`.
+- Find the configuration with `devmachine config path`. Never guess it.
+
 ## First, always
 
 Answer any question about a machine, workspace, DNS, published sites,
