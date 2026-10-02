@@ -115,8 +115,18 @@ def pr_number(args: str) -> str | None:
 
 # ── transcript ────────────────────────────────────────────────────────────
 
+def claude_slug(path: Path) -> str:
+    """The folder Claude Code keeps a project's transcripts in.
+
+    Every character that is not an ASCII letter or digit becomes `-`, so
+    `/home/alice/.config` is `-home-alice--config`. Replacing only `/` missed
+    every path with a dot, an underscore or a space.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))
+
+
 def find_transcript(session: str, project: Path) -> Path | None:
-    slug = str(project.resolve()).replace("/", "-")
+    slug = claude_slug(project.resolve())
     d = PROJECTS_DIR / slug
     if session != "auto":
         for f in d.glob(f"{session}*.jsonl"):
@@ -136,7 +146,7 @@ def recent_transcripts(project: Path, limit: int = 4, max_age_h: float = 12) -> 
     different files (a worktree writes to its own slug), so the panel reads the
     newest for the plan and all of them for the references.
     """
-    slug = str(project.resolve()).replace("/", "-")
+    slug = claude_slug(project.resolve())
     files = [f for sub in project_dirs(slug) for f in sub.glob("*.jsonl")]
     files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     floor = time.time() - max_age_h * 3600

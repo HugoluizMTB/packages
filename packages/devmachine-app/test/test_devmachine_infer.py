@@ -65,7 +65,7 @@ def test_find_transcript_auto_includes_worktrees(monkeypatch, tmp_path):
 
     projects = tmp_path / "projects"
     repo = tmp_path / "dash"
-    slug = str(repo.resolve()).replace("/", "-")
+    slug = m.claude_slug(repo.resolve())
     (projects / slug).mkdir(parents=True)
     (projects / f"{slug}--claude-worktrees-da-x").mkdir()
 
@@ -85,7 +85,7 @@ def test_find_transcript_auto_ignores_sibling_project(monkeypatch, tmp_path):
 
     projects = tmp_path / "projects"
     repo = tmp_path / "dash"
-    slug = str(repo.resolve()).replace("/", "-")
+    slug = m.claude_slug(repo.resolve())
     (projects / slug).mkdir(parents=True)
     (projects / f"{slug}board").mkdir()
     (projects / f"{slug}board" / "other.jsonl").write_text("{}\n")
@@ -511,7 +511,7 @@ def test_build_context_merges_refs_across_sessions(monkeypatch, tmp_path):
     projects = tmp_path / "projects"
     repo = tmp_path / "dash"
     repo.mkdir()
-    slug = str(repo.resolve()).replace("/", "-")
+    slug = m.claude_slug(repo.resolve())
     (projects / slug).mkdir(parents=True)
     (projects / f"{slug}--claude-worktrees-da-x").mkdir()
 
@@ -544,7 +544,7 @@ def test_recent_transcripts_limit_and_age(monkeypatch, tmp_path):
 
     projects = tmp_path / "projects"
     repo = tmp_path / "dash"
-    slug = str(repo.resolve()).replace("/", "-")
+    slug = m.claude_slug(repo.resolve())
     (projects / slug).mkdir(parents=True)
 
     now = _time.time()
@@ -1492,3 +1492,23 @@ def test_build_context_reports_claude_harness(monkeypatch, tmp_path):
     ctx = m.build_context("sess", None, resolve=False)
     assert ctx["harness"] == "claude"
     assert ctx["isClaude"] is True
+
+
+def test_claude_slug_replaces_every_character_claude_code_does_not_keep():
+    import devmachine_infer as m
+
+    assert m.claude_slug(Path("/home/alice/.config/devmachine")) == "-home-alice--config-devmachine"
+    assert m.claude_slug(Path("/home/alice/dev/my_app v2")) == "-home-alice-dev-my-app-v2"
+
+
+def test_recent_transcripts_finds_a_project_whose_path_has_a_dot(tmp_path, monkeypatch):
+    import devmachine_infer as m
+
+    projects = tmp_path / "projects"
+    repo = tmp_path / ".config" / "repo"
+    repo.mkdir(parents=True)
+    folder = projects / m.claude_slug(repo.resolve())
+    folder.mkdir(parents=True)
+    (folder / "a.jsonl").write_text("{}\n")
+    monkeypatch.setattr(m, "PROJECTS_DIR", projects)
+    assert [f.name for f in m.recent_transcripts(repo)] == ["a.jsonl"]
