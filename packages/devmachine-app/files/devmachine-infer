@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""devmachine-infer: Claude Code session transcript -> context-panel JSON.
+"""devmachine-infer: coding-agent session transcript -> context-panel JSON.
 
 Usage:
     devmachine-infer --session <tmux-session> [--project DIR] [--no-resolve]
 
-Deterministic and LLM-free. Resolves the tmux session's cwd, finds its Claude
-transcript, extracts PR/Linear/plan/todo references, optionally resolves live
-GitHub state via `gh`, and prints one JSON document (the context-panel schema).
+Deterministic and LLM-free. Resolves the tmux session's cwd, finds the
+transcript of the harness running there (Claude Code, Codex, Pi, opencode,
+Kimi Code, Cline or Antigravity), extracts PR/Linear/plan/todo references,
+optionally resolves live GitHub state via `gh`, and prints one JSON document
+(the context-panel schema).
 
 Vendored (verbatim, adapted only in return shape where noted) from the
 eoq-live engine at
@@ -17,20 +19,32 @@ version and this script must not depend on it.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
 import re
+import sqlite3
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 PI_SESSIONS_DIR = Path.home() / ".pi" / "agent" / "sessions"
+# opencode follows XDG on macOS too, never ~/Library.
+OPENCODE_DATA_DIR = Path(os.environ.get("XDG_DATA_HOME")
+                         or Path.home() / ".local" / "share") / "opencode"
+KIMI_HOME = Path(os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code")
+_CLINE_DATA = Path(os.environ.get("CLINE_DATA_DIR")
+                   or Path(os.environ.get("CLINE_DIR") or Path.home() / ".cline") / "data")
+CLINE_SESSIONS_DIR = Path(os.environ.get("CLINE_SESSION_DATA_DIR") or _CLINE_DATA / "sessions")
+CLINE_DB_PATH = Path(os.environ.get("CLINE_DB_DATA_DIR") or _CLINE_DATA / "db") / "sessions.db"
+ANTIGRAVITY_DIR = Path.home() / ".gemini" / "antigravity-cli"
 
-HARNESSES = ("claude", "codex", "pi")
+HARNESSES = ("claude", "codex", "pi", "opencode", "kimi", "cline", "antigravity")
 
 CONFIG_PATH_LINUX = Path("/etc/devmachine-app/config.json")
 CONFIG_PATH_MACOS = Path.home() / ".config" / "devmachine-app" / "config.json"
@@ -237,6 +251,228 @@ def find_pi_transcript(project: Path) -> Path | None:
     return files[0] if files else None
 
 
+def _cwd_forms(project: Path) -> list[str]:
+    """The project's path as a harness may have stored it: as given, and with
+    its symlinks resolved. These harnesses record the cwd itself, not a slug."""
+    return sorted({os.path.abspath(str(project)), str(project.resolve())})
+
+
+def _mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _newest_first(dated: list, limit: int, max_age_h: float) -> list:
+    """The items of `(mtime, item)` pairs, newest first: those touched within
+    `max_age_h`, or else the newest one alone — the same rule as the others."""
+    dated = sorted(dated, key=lambda d: d[0], reverse=True)
+    floor = time.time() - max_age_h * 3600
+    fresh = [item for mtime, item in dated if mtime >= floor]
+    return (fresh or [item for _, item in dated[:1]])[:limit]
+
+
+class OpencodeSession(NamedTuple):
+    """An opencode session: rows in a SQLite database, not a file of its own."""
+    db: Path
+    id: str
+    updated: float
+
+
+def _open_readonly(db: Path) -> sqlite3.Connection:
+    """A connection that can never change the database.
+
+    `mode=ro` still reads what a running writer keeps in the WAL, but on a WAL
+    database whose `-wal` is gone it creates `-wal`/`-shm` itself — owned by
+    whoever runs this, which can lock the harness out of its own database.
+    No `-wal` and no `-journal` means no writer is open, and only then is
+    `immutable` safe: it ignores both, and every lock.
+    """
+    uri = db.absolute().as_uri()
+    idle = not any(db.with_name(db.name + s).exists() for s in ("-wal", "-journal"))
+    return sqlite3.connect(uri + ("?mode=ro&immutable=1" if idle else "?mode=ro"),
+                           uri=True, timeout=2)
+
+
+def _query(db: Path, sql: str, args=()) -> list | None:
+    """Every row, or None when the database cannot be read at all."""
+    try:
+        con = _open_readonly(db)
+        try:
+            return con.execute(sql, args).fetchall()
+        finally:
+            con.close()
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+
+
+def opencode_databases() -> list[Path]:
+    """`OPENCODE_DB` when set (absolute, or a name in the data dir), else every
+    channel's database: public releases write `opencode.db`, others
+    `opencode-<channel>.db`."""
+    override = os.environ.get("OPENCODE_DB")
+    if override:
+        p = Path(override)
+        return [p if p.is_absolute() else OPENCODE_DATA_DIR / p]
+    return sorted(OPENCODE_DATA_DIR.glob("opencode*.db"))
+
+
+def recent_opencode_transcripts(project: Path, limit: int = 4,
+                                max_age_h: float = 12) -> list[OpencodeSession]:
+    """The project's top-level opencode sessions. A subagent's session has a
+    `parent_id` and the same directory, and belongs to its parent."""
+    forms = _cwd_forms(project)
+    marks = ",".join("?" * len(forms))
+    dated = []
+    for db in opencode_databases():
+        rows = _query(db, f"SELECT id, time_updated FROM session WHERE directory IN ({marks})"
+                          " AND parent_id IS NULL AND time_archived IS NULL"
+                          " ORDER BY time_updated DESC LIMIT 20", forms) or []
+        for sid, updated in rows:
+            if isinstance(sid, str) and isinstance(updated, (int, float)):
+                dated.append((updated / 1000, OpencodeSession(db, sid, updated / 1000)))
+    return _newest_first(dated, limit, max_age_h)
+
+
+def find_opencode_transcript(project: Path) -> OpencodeSession | None:
+    found = recent_opencode_transcripts(project, limit=1)
+    return found[0] if found else None
+
+
+def kimi_workdir_key(work_dir: str) -> str:
+    """Kimi Code's folder name for a cwd: a slug of the last path component and
+    a hash of the whole path, as `ac2/_base/utils/workdir-slug.ts` builds it."""
+    normalized = re.sub(r"/+$", "", work_dir.replace("\\", "/"))
+    slug = re.sub(r"[^a-z0-9._-]+", "-", normalized.split("/")[-1].lower())
+    slug = re.sub(r"^-+|-+$", "", re.sub(r"^-+|-+$", "", slug)[:40])
+    if slug in ("", ".", ".."):
+        slug = "workspace"
+    return f"wd_{slug}_{hashlib.sha256(normalized.encode('utf-8')).hexdigest()[:12]}"
+
+
+def recent_kimi_transcripts(project: Path, limit: int = 4, max_age_h: float = 12) -> list[Path]:
+    """The main agent's wire of each of the project's Kimi sessions.
+
+    `session_index.jsonl` comes first: a workspace migrated from the older
+    kimi-cli keeps its old folder, which the computed key would miss.
+    """
+    forms = _cwd_forms(project)
+    dirs, deleted = {}, set()
+    try:
+        for d in iter_events(KIMI_HOME / "session_index.jsonl"):
+            sid = d.get("sessionId")
+            if not isinstance(sid, str):
+                continue
+            if d.get("deleted"):
+                deleted.add(sid)
+            elif d.get("workDir") in forms and isinstance(d.get("sessionDir"), str):
+                dirs[sid] = Path(d["sessionDir"])
+    except OSError:
+        pass
+    for form in forms:
+        for d in (KIMI_HOME / "sessions" / kimi_workdir_key(form)).glob("session_*"):
+            dirs.setdefault(d.name, d)
+    dated = []
+    for sid, d in dirs.items():
+        wire = d / "agents" / "main" / "wire.jsonl"
+        mtime = None if sid in deleted else _mtime(wire)
+        if mtime is not None:
+            dated.append((mtime, wire))
+    return _newest_first(dated, limit, max_age_h)
+
+
+def find_kimi_transcript(project: Path) -> Path | None:
+    files = recent_kimi_transcripts(project, limit=1)
+    return files[0] if files else None
+
+
+def _cline_manifest_rows(forms: list[str]) -> list[tuple]:
+    """What the session index would answer, read from each session's manifest
+    (`sessions/<id>/<id>.json`) — Cline itself does this when SQLite fails."""
+    rows = []
+    for f in CLINE_SESSIONS_DIR.glob("*/*.json"):
+        if f.stem != f.parent.name:
+            continue
+        try:
+            manifest = json.loads(f.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        if manifest.get("cwd") in forms or manifest.get("workspace_root") in forms:
+            rows.append((f.parent.name, manifest.get("messages_path")))
+    return rows
+
+
+def recent_cline_transcripts(project: Path, limit: int = 4, max_age_h: float = 12) -> list[Path]:
+    """The messages file of each of the project's top-level Cline sessions.
+
+    A session matches on its cwd or its git root, as Cline's own list does. A
+    subagent is a row of its own (`is_subagent`), filed under its parent.
+    """
+    forms = _cwd_forms(project)
+    marks = ",".join("?" * len(forms))
+    rows = _query(CLINE_DB_PATH,
+                  f"SELECT session_id, messages_path FROM sessions"
+                  f" WHERE (cwd IN ({marks}) OR workspace_root IN ({marks}))"
+                  " AND is_subagent = 0 AND (parent_session_id IS NULL OR parent_session_id = '')"
+                  " ORDER BY started_at DESC LIMIT 20", forms + forms)
+    if rows is None:
+        rows = _cline_manifest_rows(forms)
+    dated = []
+    for sid, stored in rows:
+        if not isinstance(sid, str):
+            continue
+        for path in ([Path(stored)] if isinstance(stored, str) and stored else []) + [
+                CLINE_SESSIONS_DIR / sid / f"{sid}.messages.json"]:
+            mtime = _mtime(path)
+            if mtime is not None:
+                dated.append((mtime, path))
+                break
+    return _newest_first(dated, limit, max_age_h)
+
+
+def find_cline_transcript(project: Path) -> Path | None:
+    files = recent_cline_transcripts(project, limit=1)
+    return files[0] if files else None
+
+
+def recent_antigravity_transcripts(project: Path, limit: int = 4,
+                                   max_age_h: float = 12) -> list[Path]:
+    """The transcript of each Antigravity conversation started in the project.
+
+    Every conversation lives flat under `brain/<id>/`, and its transcript names
+    no workspace: the only link from a cwd to a conversation is the prompt log,
+    `history.jsonl`, whose lines carry both. Its format is undocumented, so
+    any line that does not read as expected is skipped.
+    """
+    forms = _cwd_forms(project)
+    ids = []
+    try:
+        for d in iter_events(ANTIGRAVITY_DIR / "history.jsonl"):
+            cid = d.get("conversationId")
+            if (d.get("workspace") in forms and isinstance(cid, str)
+                    and re.fullmatch(r"[\w-]+", cid)):
+                ids.append(cid)
+    except OSError:
+        pass
+    dated = []
+    for cid in dict.fromkeys(ids):
+        logs = ANTIGRAVITY_DIR / "brain" / cid / ".system_generated" / "logs"
+        for name in ("transcript_full.jsonl", "transcript.jsonl"):
+            mtime = _mtime(logs / name)
+            if mtime is not None:
+                dated.append((mtime, logs / name))
+                break
+    return _newest_first(dated, limit, max_age_h)
+
+
+def find_antigravity_transcript(project: Path) -> Path | None:
+    files = recent_antigravity_transcripts(project, limit=1)
+    return files[0] if files else None
+
+
 def iter_events(path: Path):
     """Yield parsed transcript lines; skip malformed ones (partial writes)."""
     with open(path, errors="replace") as fh:
@@ -247,6 +483,67 @@ def iter_events(path: Path):
                 continue
             if isinstance(event, dict):
                 yield event
+
+
+def _iso_ms(ms) -> str:
+    """An epoch-milliseconds stamp in the ISO form the other harnesses write."""
+    if not isinstance(ms, (int, float)) or isinstance(ms, bool):
+        return ""
+    try:
+        moment = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return ""
+    return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def opencode_events(session: OpencodeSession) -> list[dict]:
+    """The session's parts in order, each with its message's role, then the
+    `todo` table as one last event. The table is read even when empty: an
+    empty list there is a cleared checklist, not a missing one."""
+    rows = _query(session.db,
+                  "SELECT p.time_created, p.time_updated, m.data, p.data"
+                  " FROM part p JOIN message m ON m.id = p.message_id"
+                  " WHERE p.session_id = ? ORDER BY m.time_created, m.id, p.id",
+                  (session.id,)) or []
+    events = []
+    for created, updated, message, part in rows:
+        data = _json_object(part)
+        if data:
+            events.append({"ts": _iso_ms(created), "updated": _iso_ms(updated),
+                           "role": _json_object(message).get("role"), "part": data})
+    todos = _query(session.db, "SELECT content, status FROM todo WHERE session_id = ?"
+                               " ORDER BY position", (session.id,))
+    if todos is not None:
+        events.append({"todos": [{"content": c, "status": s} for c, s in todos]})
+    return events
+
+
+def cline_events(path: Path) -> list[dict]:
+    """The messages of a Cline session. Cline rewrites the file in place, not
+    through a rename, so a read can land on half of it: one retry, then none."""
+    for attempt in range(2):
+        try:
+            data = json.loads(path.read_text(errors="replace"))
+            break
+        except (OSError, ValueError):
+            if attempt:
+                return []
+            time.sleep(0.05)
+    messages = data.get("messages") if isinstance(data, dict) else data
+    return [m for m in messages if isinstance(m, dict)] if isinstance(messages, list) else []
+
+
+def load_events(harness: str, tx) -> list[dict]:
+    """A transcript's events, in the harness's own shape. opencode keeps its
+    sessions in SQLite and Cline in one JSON document; the rest write JSONL."""
+    if harness == "opencode":
+        return opencode_events(tx)
+    if harness == "cline":
+        return cline_events(tx)
+    try:
+        return list(iter_events(tx))
+    except OSError:
+        return []
 
 
 def _instant(ts: str) -> datetime | None:
@@ -360,7 +657,138 @@ def _pi_ref_blobs(events, touched_md: list):
                 yield ts, text
 
 
-_REF_BLOBS = {"claude": _claude_ref_blobs, "codex": _codex_ref_blobs, "pi": _pi_ref_blobs}
+# File bodies are code, not session references (see `_claude_ref_blobs`), under
+# the names each harness's write and edit tools give them.
+_FILE_BODY_KEYS = {"content", "new_string", "old_string", "oldString", "newString",
+                   "file_text", "old_str", "new_str", "CodeContent", "ReplacementContent",
+                   "TargetContent", "ReplacementChunks"}
+
+
+def _args_blob(args) -> str:
+    args = _json_object(args)
+    return json.dumps({k: v for k, v in args.items() if k not in _FILE_BODY_KEYS},
+                      ensure_ascii=False)
+
+
+def _text(value) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _opencode_ref_blobs(events, touched_md: list):
+    """A `text` part is chat text whatever the role; a `tool` part holds the
+    call and its result together, in `state.input` and `state.output`."""
+    for d in events:
+        part = d.get("part")
+        if not isinstance(part, dict):
+            continue
+        ts = d.get("ts") or ""
+        if part.get("type") == "text":
+            yield ts, _text(part.get("text"))
+        elif part.get("type") == "tool":
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            yield ts, _args_blob(state.get("input"))
+            for key in ("output", "error"):
+                if isinstance(state.get(key), str):
+                    yield ts, state[key]
+
+
+def _kimi_ref_blobs(events, touched_md: list):
+    """A user prompt is a `turn.prompt` record; the model's text, its tool calls
+    and their results are loop events. Streaming deltas are never written, so
+    each text appears once, whole."""
+    for d in events:
+        ts = _iso_ms(d.get("time"))
+        kind = d.get("type")
+        if kind == "turn.prompt":
+            prompt = d.get("input")
+            for c in prompt if isinstance(prompt, list) else []:
+                if isinstance(c, dict) and c.get("type") == "text":
+                    yield ts, _text(c.get("text"))
+        elif kind == "context.append_loop_event":
+            event = d.get("event")
+            if not isinstance(event, dict):
+                continue
+            ekind = event.get("type")
+            if ekind == "content.part":
+                part = event.get("part")
+                if isinstance(part, dict) and part.get("type") == "text":
+                    yield ts, _text(part.get("text"))
+            elif ekind == "tool.call":
+                yield ts, _args_blob(event.get("args"))
+            elif ekind == "tool.result":
+                result = event.get("result") if isinstance(event.get("result"), dict) else {}
+                output = result.get("output")
+                if isinstance(output, str):
+                    yield ts, output
+                for c in output if isinstance(output, list) else []:
+                    if isinstance(c, dict):
+                        yield ts, _text(c.get("text"))
+
+
+def _cline_result_texts(content):
+    """A tool result is a string, text blocks, or — for `run_commands` — one
+    object per command with its `result` or `error`."""
+    if isinstance(content, str):
+        yield content
+    for c in content if isinstance(content, list) else []:
+        if isinstance(c, dict):
+            for key in ("text", "result", "error"):
+                if isinstance(c.get(key), str):
+                    yield c[key]
+
+
+def _cline_ref_blobs(events, touched_md: list):
+    """Cline's messages are Anthropic-shaped, and a tool's result is a `user`
+    message of its own."""
+    for msg in events:
+        ts = _iso_ms(msg.get("ts"))
+        content = msg.get("content")
+        if isinstance(content, str):
+            yield ts, content
+        for b in content if isinstance(content, list) else []:
+            if not isinstance(b, dict):
+                continue
+            kind = b.get("type")
+            if kind == "text":
+                yield ts, _text(b.get("text"))
+            elif kind == "tool_use":
+                yield ts, _args_blob(b.get("input"))
+            elif kind == "tool_result":
+                for text in _cline_result_texts(b.get("content")):
+                    yield ts, text
+
+
+_AGY_REQUEST_RE = re.compile(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", re.S)
+_AGY_SKIP = {"CONVERSATION_HISTORY", "CHECKPOINT", "EPHEMERAL_MESSAGE", "SYSTEM_MESSAGE",
+             "ERROR_MESSAGE"}
+
+
+def _antigravity_ref_blobs(events, touched_md: list):
+    """One step per line. A user step wraps the request in metadata the user
+    never typed, so only `<USER_REQUEST>` counts. A model step is either a
+    `PLANNER_RESPONSE` (text and tool calls) or the result of the call before
+    it, with the result in `content`."""
+    for d in events:
+        ts = _text(d.get("created_at"))
+        kind = d.get("type")
+        content = _text(d.get("content"))
+        if kind == "USER_INPUT":
+            m = _AGY_REQUEST_RE.search(content)
+            yield ts, m.group(1) if m else content
+        elif kind in _AGY_SKIP or d.get("source") != "MODEL":
+            continue
+        else:
+            if content:
+                yield ts, content
+            calls = d.get("tool_calls") if kind == "PLANNER_RESPONSE" else None
+            for call in calls if isinstance(calls, list) else []:
+                if isinstance(call, dict):
+                    yield ts, _args_blob(call.get("args"))
+
+
+_REF_BLOBS = {"claude": _claude_ref_blobs, "codex": _codex_ref_blobs, "pi": _pi_ref_blobs,
+              "opencode": _opencode_ref_blobs, "kimi": _kimi_ref_blobs,
+              "cline": _cline_ref_blobs, "antigravity": _antigravity_ref_blobs}
 
 
 def extract_refs(events, default_repo: str | None, harness: str = "claude"):
@@ -680,7 +1108,53 @@ def latest_todos(events, harness: str = "claude") -> list[dict]:
         return codex_todos(events)
     if harness == "pi":
         return pi_todos(events)
+    if harness == "opencode":
+        return opencode_todos(events)
+    if harness == "kimi":
+        return kimi_todos(events)
+    if harness in ("cline", "antigravity"):
+        # Neither CLI has a todo tool: Cline 3.x dropped the focus chain the
+        # VS Code extension keeps, and agy's `manage_task` runs commands.
+        return []
     return latest_tasks(events) or todo_write_items(events)
+
+
+_OPENCODE_TODO_STATE = {**_TODO_STATE, "cancelled": "done"}
+
+
+def opencode_todos(events) -> list[dict]:
+    """opencode keeps the current checklist in its `todo` table, replaced on
+    every `todowrite` call. The last call's own input stands in only when the
+    table could not be read."""
+    latest = next((d["todos"] for d in events if isinstance(d.get("todos"), list)), None)
+    if latest is None:
+        for d in events:
+            part = d.get("part")
+            if not isinstance(part, dict) or part.get("tool") != "todowrite":
+                continue
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            items = _json_object(state.get("input")).get("todos")
+            if isinstance(items, list):
+                latest = items
+    return [{"text": _text(t.get("content")),
+             "state": _OPENCODE_TODO_STATE.get(_text(t.get("status")), "pending")}
+            for t in latest or [] if isinstance(t, dict)]
+
+
+_KIMI_TODO_STATE = {"done": "done", "in_progress": "active", "pending": "pending"}
+
+
+def kimi_todos(events) -> list[dict]:
+    """Kimi persists its `TodoList` as a `tools.update_store` record under the
+    key `todo`; the last one is the current list, and `[]` clears it."""
+    latest = None
+    for d in events:
+        if d.get("type") == "tools.update_store" and d.get("key") == "todo":
+            if isinstance(d.get("value"), list):
+                latest = d["value"]
+    return [{"text": _text(t.get("title")),
+             "state": _KIMI_TODO_STATE.get(_text(t.get("status")), "pending")}
+            for t in latest or [] if isinstance(t, dict)]
 
 
 def codex_todos(events) -> list[dict]:
@@ -807,7 +1281,81 @@ def extract_background(events, harness: str = "claude") -> dict:
         # tool returned in the same turn it was called, with no async id to
         # track. Nothing to report is the honest answer, not a guess.
         return {"monitors": [], "shells": [], "agents": []}
+    if harness == "opencode":
+        return _extract_background_opencode(events)
+    if harness == "kimi":
+        return _extract_background_kimi(events)
+    if harness == "cline":
+        return _extract_background_cline(events)
+    if harness == "antigravity":
+        # A subagent is a conversation of its own under `brain/`, and nothing
+        # in either transcript says reliably that it is still working.
+        return {"monitors": [], "shells": [], "agents": []}
     return _extract_background_claude(events)
+
+
+def _running_agents(spawned: dict, finished: set, started: dict, newest: str) -> dict:
+    agents = [{"label": label, "status": "running"} for key, label in spawned.items()
+              if key not in finished and not _is_stale(started.get(key), newest)]
+    return {"monitors": [], "shells": [], "agents": agents}
+
+
+def _extract_background_opencode(events) -> dict:
+    """A `task` part stays `pending` or `running` while its subagent works in a
+    child session, and turns `completed` or `error` when it returns."""
+    spawned, started, newest = {}, {}, ""
+    for i, d in enumerate(events):
+        newest = max(newest, _text(d.get("updated")) or _text(d.get("ts")))
+        part = d.get("part")
+        if not isinstance(part, dict) or part.get("tool") != "task":
+            continue
+        state = part.get("state") if isinstance(part.get("state"), dict) else {}
+        if state.get("status") in ("pending", "running"):
+            label = _task_label(_json_object(state.get("input")),
+                                ("description", "subagent_type", "prompt"))
+            spawned[i] = label or _text(part.get("callID")) or "task"
+            started[i] = _text(d.get("ts"))
+    return _running_agents(spawned, set(), started, newest)
+
+
+def _extract_background_kimi(events) -> dict:
+    """The parent wire records `subagent.spawned`, then one terminal record:
+    `completed`, `failed` or `cancelled`."""
+    spawned, started, finished, newest = {}, {}, set(), ""
+    for d in events:
+        ts = _iso_ms(d.get("time"))
+        newest = max(newest, ts)
+        agent = d.get("subagentId")
+        if not isinstance(agent, str):
+            continue
+        kind = d.get("type")
+        if kind == "subagent.spawned":
+            spawned[agent] = _task_label(d, ("description", "subagentName")) or agent
+            started[agent] = ts
+        elif kind in ("subagent.completed", "subagent.failed", "subagent.cancelled"):
+            finished.add(agent)
+    return _running_agents(spawned, finished, started, newest)
+
+
+def _extract_background_cline(events) -> dict:
+    """`spawn_agent` holds the turn until its subagent answers, so a call
+    without its `tool_result` yet is a subagent still at work."""
+    spawned, started, finished, newest = {}, {}, set(), ""
+    for msg in events:
+        ts = _iso_ms(msg.get("ts"))
+        newest = max(newest, ts)
+        content = msg.get("content")
+        for b in content if isinstance(content, list) else []:
+            if not isinstance(b, dict):
+                continue
+            if (b.get("type") == "tool_use" and b.get("name") == "spawn_agent"
+                    and isinstance(b.get("id"), str)):
+                label = _task_label(_json_object(b.get("input")), ("task", "systemPrompt"))
+                spawned[b["id"]] = label or b["id"]
+                started[b["id"]] = ts
+            elif b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str):
+                finished.add(b["tool_use_id"])
+    return _running_agents(spawned, finished, started, newest)
 
 
 def _extract_background_codex(events) -> dict:
@@ -1036,6 +1584,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Program names, matched whole: `kimi-code` is the title Kimi gives its
+# process, `.cline` the native binary Cline's node launcher starts, `agy`
+# Antigravity's CLI.
+PROGRAM_HARNESSES = {"opencode": "opencode", "kimi": "kimi", "kimi-code": "kimi",
+                     "cline": "cline", ".cline": "cline", "agy": "antigravity"}
+SCRIPT_RUNTIMES = ("node", "bun", "deno")
+# What tmux shows as the pane command, for a harness not named after its id.
+PANE_COMMANDS = {"kimi-code": "kimi", "agy": "antigravity", ".cline": "cline"}
+
+
+def _program_names(words: list[str]):
+    """The program a command line runs: its first word, and the script after
+    a runtime (`node /home/alice/.local/bin/cline`), flags skipped."""
+    first = words[0].rsplit("/", 1)[-1]
+    yield first
+    if first in SCRIPT_RUNTIMES:
+        script = next((w for w in words[1:] if not w.startswith("-")), None)
+        if script:
+            yield script.rsplit("/", 1)[-1]
+
+
 def _harness_in(args: str) -> str | None:
     """The harness a process command line runs, from its install path or name."""
     words = args.split()
@@ -1048,6 +1617,9 @@ def _harness_in(args: str) -> str | None:
         return "codex"
     if first == "pi" or "pi-coding-agent" in args:
         return "pi"
+    for name in _program_names(words):
+        if name in PROGRAM_HARNESSES:
+            return PROGRAM_HARNESSES[name]
     return None
 
 
@@ -1055,9 +1627,10 @@ def pane_harness(session: str) -> str | None:
     """The harness running in the session's tmux pane, or None.
 
     tmux names the pane's foreground command, which is rarely the harness:
-    Codex and Pi are node scripts, so the pane says `node`, and Claude's
-    binary is named after its version. When the name is not enough, the
-    command lines of the processes under the pane settle it.
+    Codex, Pi (from npm) and Cline are node scripts, so the pane says `node`,
+    Claude's binary is named after its version, and Kimi and Antigravity go
+    by `kimi-code` and `agy`. When the name is not enough, the command lines
+    of the processes under the pane settle it.
     """
     ok, out = run(["tmux", "display", "-p", "-t", session,
                    "#{pane_current_command}\t#{pane_pid}"])
@@ -1065,6 +1638,7 @@ def pane_harness(session: str) -> str | None:
         return None
     cmd, _, pid = out.strip().partition("\t")
     cmd = cmd.strip().lower()
+    cmd = PANE_COMMANDS.get(cmd, cmd)
     if cmd in HARNESSES:
         return cmd
     if VERSION_RE.fullmatch(cmd):
@@ -1092,7 +1666,8 @@ def pane_harness(session: str) -> str | None:
 
 
 def detect_harness(session: str | None, project: Path) -> str:
-    """Which coding-agent harness owns this session: claude, codex or pi.
+    """Which coding-agent harness owns this session: claude, codex, pi,
+    opencode, kimi, cline or antigravity.
 
     The tmux pane's running command is the strongest signal when a session
     name is given — a pane runs one harness at a time, and still shows it
@@ -1100,7 +1675,7 @@ def detect_harness(session: str | None, project: Path) -> str:
     skipped, or inconclusive (no tmux session; a `zmx` session whose pane
     runs a shell instead of the harness directly), for a session started
     outside tmux. The fallback then is the project's most recently modified
-    transcript across the three harnesses: whichever one someone is actively
+    transcript across every harness: whichever one someone is actively
     driving is the one that wrote most recently.
     """
     running = pane_harness(session) if session else None
@@ -1110,23 +1685,30 @@ def detect_harness(session: str | None, project: Path) -> str:
         "claude": find_transcript("auto", project),
         "codex": find_codex_transcript(project),
         "pi": find_pi_transcript(project),
+        "opencode": find_opencode_transcript(project),
+        "kimi": find_kimi_transcript(project),
+        "cline": find_cline_transcript(project),
+        "antigravity": find_antigravity_transcript(project),
     }
     best, best_mtime = "claude", -1.0
-    for harness, path in candidates.items():
-        if path is None:
+    for harness, tx in candidates.items():
+        if tx is None:
             continue
-        mtime = path.stat().st_mtime
-        if mtime > best_mtime:
+        mtime = tx.updated if isinstance(tx, OpencodeSession) else _mtime(tx)
+        if mtime is not None and mtime > best_mtime:
             best, best_mtime = harness, mtime
     return best
 
 
 def _discover(harness: str, project: Path):
-    if harness in ("codex", "pi"):
-        found = (recent_codex_transcripts(project) if harness == "codex"
-                 else recent_pi_transcripts(project))
-        return (found[0] if found else None), found
-    return find_transcript("auto", project), recent_transcripts(project)
+    recent = {"codex": recent_codex_transcripts, "pi": recent_pi_transcripts,
+              "opencode": recent_opencode_transcripts, "kimi": recent_kimi_transcripts,
+              "cline": recent_cline_transcripts,
+              "antigravity": recent_antigravity_transcripts}.get(harness)
+    if recent is None:
+        return find_transcript("auto", project), recent_transcripts(project)
+    found = recent(project)
+    return (found[0] if found else None), found
 
 
 def build_context(session: str | None, project: str | None, resolve: bool) -> dict:
@@ -1140,12 +1722,12 @@ def build_context(session: str | None, project: str | None, resolve: bool) -> di
         return {"cwd": str(proj), "isClaude": False, "harness": harness, "updatedAt": _now(),
                 "plan": None, "prs": [], "links": [],
                 "agents": [], "monitors": [], "shells": []}
-    events = list(iter_events(tx))
+    events = load_events(harness, tx)
     repo = default_repo_of(proj)
     refs = extract_refs(events, repo, harness)
     for other_tx in siblings:
         if other_tx != tx:
-            merge_refs(refs, extract_refs(iter_events(other_tx), repo, harness))
+            merge_refs(refs, extract_refs(load_events(harness, other_tx), repo, harness))
     todos = latest_todos(events, harness)
     github = resolve_all(refs["github"]) if resolve else list(refs["github"].values())
     links = [{"url": u, **v} for u, v in refs["links"].items()]
