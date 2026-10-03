@@ -54,6 +54,7 @@ never seen.
 | [`pi`](packages/pi/README.md) | workspace | The Pi coding agent for one account, without Node. |
 | [`kimi-code`](packages/kimi-code/README.md) | workspace | Moonshot AI's Kimi Code CLI (`kimi`) for one account. |
 | [`cline`](packages/cline/README.md) | workspace | The Cline CLI for one account. |
+| [`codex`](packages/codex/README.md) | workspace | OpenAI's Codex CLI for one account, without Node. |
 | [`devmachine-skills`](packages/devmachine-skills/README.md) | workspace | Teaches supported agents to operate Devmachine and create packages. |
 
 ## A pin is a tag, never a branch

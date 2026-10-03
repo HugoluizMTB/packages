@@ -1,0 +1,44 @@
+---
+- name: Load the package names for this family
+  ansible.builtin.include_vars: "{{ ansible_facts['os_family'] }}.yml"
+
+- name: Install what the installer downloads with
+  ansible.builtin.package:
+    name: "{{ devmachine_codex_packages }}"
+    state: present
+
+# A dry run on a machine where this account does not exist yet cannot become
+# it: Ansible has no user to hand its temporary files to, and fails saying so.
+- name: Look for the account
+  ansible.builtin.stat:
+    path: "{{ devmachine_codex_home }}"
+  register: devmachine_codex_account
+  check_mode: false
+
+# The installer has no flag to leave the PATH alone: it skips the edit only
+# when ~/.local/bin is already on it, so it is, and the line goes to .zshenv
+# below rather than to whichever startup file the installer guesses.
+# CODEX_NON_INTERACTIVE stops it asking to start Codex at the end. Codex
+# updates itself from then on, so this runs once per account.
+- name: Install the Codex CLI
+  become: true
+  become_user: "{{ devmachine_workspace.user }}"
+  environment:
+    HOME: "{{ devmachine_codex_home }}"
+    PATH: "{{ devmachine_codex_home }}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    CODEX_NON_INTERACTIVE: "1"
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://chatgpt.com/codex/install.sh | sh
+    creates: "{{ devmachine_codex_home }}/.local/bin/codex"
+  when: not ansible_check_mode or devmachine_codex_account.stat.exists
+
+# .zshenv is read by every zsh, interactive or not. The same line is written by
+# the dev package, and writing it twice costs nothing.
+- name: Put the account's own tools on the PATH
+  ansible.builtin.lineinfile:
+    path: "{{ devmachine_codex_home }}/.zshenv"
+    line: 'export PATH="$HOME/.local/bin:$PATH"'
+    create: true
+    owner: "{{ devmachine_workspace.user }}"
+    group: "{{ devmachine_workspace.user }}"
+    mode: "0644"

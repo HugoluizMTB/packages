@@ -1,0 +1,29 @@
+format: 1
+name: codex
+scope: workspace
+category: Coding agents
+summary: >-
+  OpenAI's Codex CLI for one account, from its standalone release, so it
+  needs no Node. Logging in is a person's job, once, in each account.
+
+needs: [workspace]
+
+requires:
+  cli: ">= 0.4.0"
+
+credentials:
+  # scope: workspace because ChatGPT accounts usually differ between
+  # workspaces. shareable: true because auth.json is tokens in a file, and
+  # OpenAI documents copying it to another machine. The device-code flow,
+  # because a workspace has no browser to come back to.
+  - name: codex
+    kind: manual
+    scope: workspace
+    shareable: true
+    command: codex login --device-auth
+    stored_at: ~/.codex/auth.json
+
+variables:
+  home:
+    summary: Where the account's home is.
+    default: /home/<the account>
