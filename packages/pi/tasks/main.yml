@@ -1,0 +1,51 @@
+---
+- name: Load the package names for this family
+  ansible.builtin.include_vars: "{{ ansible_facts['os_family'] }}.yml"
+
+- name: Install what the release is downloaded and unpacked with
+  ansible.builtin.package:
+    name: "{{ devmachine_pi_packages }}"
+    state: present
+
+# A dry run on a machine where this account does not exist yet cannot become
+# it: Ansible has no user to hand its temporary files to, and fails saying so.
+- name: Look for the account
+  ansible.builtin.stat:
+    path: "{{ devmachine_pi_home }}"
+  register: devmachine_pi_account
+  check_mode: false
+
+# The standalone release and not npm: it is one native program, so the
+# process is called `pi` — which is how the Devmachine app tells a Pi session
+# from any other node process — and it does not break when Node is upgraded.
+# The binary reads the files unpacked beside it, so it stays in its own
+# directory and ~/.local/bin only holds a link to it.
+- name: Install Pi
+  become: true
+  become_user: "{{ devmachine_workspace.user }}"
+  environment:
+    HOME: "{{ devmachine_pi_home }}"
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      tmp=$(mktemp -d)
+      trap 'rm -rf "$tmp"' EXIT
+      curl -fsSL {{ devmachine_pi_url | quote }} -o "$tmp/pi.tar.gz"
+      mkdir -p "$HOME/.local/share/pi" "$HOME/.local/bin"
+      tar xzf "$tmp/pi.tar.gz" -C "$HOME/.local/share/pi" --strip-components=1
+      ln -sfn "$HOME/.local/share/pi/pi" "$HOME/.local/bin/pi"
+    creates: "{{ devmachine_pi_home }}/.local/share/pi/pi"
+  vars:
+    devmachine_pi_url: >-
+      https://github.com/earendil-works/pi/releases/latest/download/pi-linux-{{
+      'arm64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'x64' }}.tar.gz
+  when: not ansible_check_mode or devmachine_pi_account.stat.exists
+
+- name: Put the account's own tools on the PATH
+  ansible.builtin.lineinfile:
+    path: "{{ devmachine_pi_home }}/.zshenv"
+    line: 'export PATH="$HOME/.local/bin:$PATH"'
+    create: true
+    owner: "{{ devmachine_workspace.user }}"
+    group: "{{ devmachine_workspace.user }}"
+    mode: "0644"

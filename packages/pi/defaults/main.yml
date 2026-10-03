@@ -1,0 +1,2 @@
+---
+devmachine_pi_home: "/home/{{ devmachine_workspace.user }}"

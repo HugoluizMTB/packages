@@ -1,0 +1,5 @@
+---
+devmachine_opencode_packages:
+  # The installer downloads with curl and unpacks with tar.
+  - curl
+  - tar

@@ -1,0 +1,29 @@
+format: 1
+name: pi
+scope: workspace
+category: Coding agents
+summary: >-
+  The Pi coding agent for one account, from its standalone release, so it
+  needs no Node. Logging in is a person's job, once, in each account.
+
+needs: [workspace]
+
+requires:
+  cli: ">= 0.4.0"
+
+credentials:
+  # scope: workspace because provider accounts usually differ between
+  # workspaces. shareable: true because auth.json is keys and tokens in a
+  # file: a copy of it works on another account. Pi has no login command of
+  # its own: it starts, and /login inside it signs in.
+  - name: pi
+    kind: manual
+    scope: workspace
+    shareable: true
+    command: pi
+    stored_at: ~/.pi/agent/auth.json
+
+variables:
+  home:
+    summary: Where the account's home is.
+    default: /home/<the account>

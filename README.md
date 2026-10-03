@@ -49,6 +49,11 @@ never seen.
 | [`claude-code`](packages/claude-code/README.md) | workspace | The Claude Code CLI for one account. |
 | [`claude-plugins`](packages/claude-plugins/README.md) | workspace | Installs and updates Claude Code plugins in one account. |
 | [`claude-remote-control`](packages/claude-remote-control/README.md) | workspace | Keeps one account's Claude Code Remote Control session up. |
+| [`antigravity`](packages/antigravity/README.md) | workspace | Google's Antigravity CLI (`agy`) for one account. |
+| [`opencode`](packages/opencode/README.md) | workspace | The opencode CLI for one account. |
+| [`pi`](packages/pi/README.md) | workspace | The Pi coding agent for one account, without Node. |
+| [`kimi-code`](packages/kimi-code/README.md) | workspace | Moonshot AI's Kimi Code CLI (`kimi`) for one account. |
+| [`cline`](packages/cline/README.md) | workspace | The Cline CLI for one account. |
 | [`devmachine-skills`](packages/devmachine-skills/README.md) | workspace | Teaches supported agents to operate Devmachine and create packages. |
 
 ## A pin is a tag, never a branch

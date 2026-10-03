@@ -1,8 +1,13 @@
+import hashlib
 import importlib.util
 import json
+import os
+import sqlite3
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+
+import pytest
 
 MODULE_PATH = Path(__file__).parent.parent / "files" / "devmachine-infer"
 loader = SourceFileLoader("devmachine_infer", str(MODULE_PATH))
@@ -1512,3 +1517,545 @@ def test_recent_transcripts_finds_a_project_whose_path_has_a_dot(tmp_path, monke
     (folder / "a.jsonl").write_text("{}\n")
     monkeypatch.setattr(m, "PROJECTS_DIR", projects)
     assert [f.name for f in m.recent_transcripts(repo)] == ["a.jsonl"]
+
+
+# ── opencode, Kimi Code, Cline, Antigravity ───────────────────────────────
+
+FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURE_HOME = "/Users/alice"
+FIXTURE_PROJECT = "/Users/alice/dev/widgets"
+CONTEXT_KEYS = {"cwd", "isClaude", "harness", "updatedAt", "plan", "prs", "links",
+                "agents", "monitors", "shells"}
+
+
+@pytest.fixture(autouse=True)
+def _no_real_harness_homes(monkeypatch, tmp_path):
+    """Keep every test away from the session stores of whoever runs it."""
+    import devmachine_infer as m
+
+    nowhere = tmp_path / "no-home"
+    monkeypatch.setattr(m, "OPENCODE_DATA_DIR", nowhere / "opencode")
+    monkeypatch.setattr(m, "KIMI_HOME", nowhere / "kimi")
+    monkeypatch.setattr(m, "CLINE_SESSIONS_DIR", nowhere / "cline" / "sessions")
+    monkeypatch.setattr(m, "CLINE_DB_PATH", nowhere / "cline" / "db" / "sessions.db")
+    monkeypatch.setattr(m, "ANTIGRAVITY_DIR", nowhere / "antigravity")
+    monkeypatch.delenv("OPENCODE_DB", raising=False)
+
+
+def _relocate(text, home, project):
+    return text.replace(FIXTURE_PROJECT, str(project)).replace(FIXTURE_HOME, str(home))
+
+
+def _install(name, home, project):
+    """Copy a harness's fixture tree into `home`, its paths moved to `project`."""
+    src = FIXTURES / name
+    for f in src.rglob("*"):
+        if f.is_file() and f.suffix != ".sql":
+            dst = home / f.relative_to(src)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(_relocate(f.read_text(), home, project))
+
+
+def _sql(path, home, project):
+    return _relocate(path.read_text(), home, project)
+
+
+def _opencode_home(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    home, project = tmp_path / "home", tmp_path / "widgets"
+    project.mkdir(parents=True)
+    data = home / ".local" / "share" / "opencode"
+    data.mkdir(parents=True)
+    db = sqlite3.connect(str(data / "opencode.db"))
+    db.executescript(_sql(FIXTURES / "opencode" / "schema.sql", home, project))
+    db.executescript(_sql(FIXTURES / "opencode" / "seed.sql", home, project))
+    db.commit()
+    db.close()
+    monkeypatch.setattr(m, "OPENCODE_DATA_DIR", data)
+    return project, data / "opencode.db"
+
+
+def _kimi_home(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    home, project = tmp_path / "home", tmp_path / "widgets"
+    project.mkdir(parents=True)
+    _install("kimi", home, project)
+    monkeypatch.setattr(m, "KIMI_HOME", home / ".kimi-code")
+    return project, home / ".kimi-code"
+
+
+def _cline_home(monkeypatch, tmp_path, with_db=True):
+    import devmachine_infer as m
+
+    home, project = tmp_path / "home", tmp_path / "widgets"
+    project.mkdir(parents=True)
+    _install("cline", home, project)
+    db_path = home / ".cline" / "data" / "db" / "sessions.db"
+    if with_db:
+        db_path.parent.mkdir(parents=True)
+        db = sqlite3.connect(str(db_path))
+        db.executescript(_sql(FIXTURES / "cline" / "schema.sql", home, project))
+        db.commit()
+        db.close()
+    monkeypatch.setattr(m, "CLINE_SESSIONS_DIR", home / ".cline" / "data" / "sessions")
+    monkeypatch.setattr(m, "CLINE_DB_PATH", db_path)
+    return project, home / ".cline" / "data"
+
+
+def _antigravity_home(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    home, project = tmp_path / "home", tmp_path / "widgets"
+    project.mkdir(parents=True)
+    _install("antigravity", home, project)
+    monkeypatch.setattr(m, "ANTIGRAVITY_DIR", home / ".gemini" / "antigravity-cli")
+    return project, home / ".gemini" / "antigravity-cli"
+
+
+def _context_for(monkeypatch, harness, project):
+    import devmachine_infer as m
+
+    monkeypatch.setattr(m, "detect_harness", lambda session, proj: harness)
+    monkeypatch.setattr(m, "default_repo_of", lambda proj: "acme/widgets")
+    return m.build_context(None, str(project), resolve=False)
+
+
+def _refs(harness, tx, default_repo="acme/other"):
+    import devmachine_infer as m
+
+    return m.extract_refs(m.load_events(harness, tx), default_repo, harness)["github"]
+
+
+# opencode
+
+def test_recent_opencode_transcripts_finds_the_projects_top_level_session(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _opencode_home(monkeypatch, tmp_path)
+    found = m.recent_opencode_transcripts(project)
+    assert [s.id for s in found] == ["ses_f01662699ffeFixtureAAAAAA"]
+    assert m.recent_opencode_transcripts(tmp_path / "gadgets") == []
+
+
+def test_opencode_refs_read_text_tool_input_and_tool_output(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _opencode_home(monkeypatch, tmp_path)
+    github = _refs("opencode", m.find_opencode_transcript(project))
+    assert "acme/widgets#42" in github
+    assert "acme/other#42" in github
+
+
+def test_opencode_todos_come_from_the_todo_table(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _opencode_home(monkeypatch, tmp_path)
+    events = m.load_events("opencode", m.find_opencode_transcript(project))
+    assert m.latest_todos(events, "opencode") == [
+        {"text": "Check the PR", "state": "active"},
+        {"text": "Run the tests", "state": "pending"}]
+
+
+def test_opencode_todos_fall_back_to_the_last_todowrite_call():
+    import devmachine_infer as m
+
+    events = [{"ts": "2026-01-01T00:00:00.000Z", "role": "assistant",
+               "part": {"type": "tool", "tool": "todowrite", "state": {
+                   "status": "completed",
+                   "input": {"todos": [{"content": "a", "status": "completed"},
+                                       {"content": "b", "status": "cancelled"}]}}}}]
+    assert m.latest_todos(events, "opencode") == [{"text": "a", "state": "done"},
+                                                    {"text": "b", "state": "done"}]
+
+
+def test_opencode_running_task_is_a_running_agent(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _opencode_home(monkeypatch, tmp_path)
+    events = m.load_events("opencode", m.find_opencode_transcript(project))
+    assert m.extract_background(events, "opencode") == {
+        "monitors": [], "shells": [], "agents": [{"label": "Review PR diff", "status": "running"}]}
+
+
+def test_build_context_reports_opencode(monkeypatch, tmp_path):
+    project, _ = _opencode_home(monkeypatch, tmp_path)
+    ctx = _context_for(monkeypatch, "opencode", project)
+    assert set(ctx) == CONTEXT_KEYS
+    assert ctx["harness"] == "opencode" and ctx["isClaude"] is False
+    assert ctx["cwd"] == str(project)
+    assert [(p["repo"], p["number"]) for p in ctx["prs"]] == [("acme/widgets", 42)]
+    assert ctx["plan"]["total"] == 2
+    assert ctx["agents"] == [{"label": "Review PR diff", "status": "running"}]
+
+
+def test_opencode_reads_a_wal_database_while_a_writer_holds_a_transaction(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, db_path = _opencode_home(monkeypatch, tmp_path)
+    writer = sqlite3.connect(str(db_path))
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("BEGIN IMMEDIATE")
+    writer.execute("UPDATE session SET title = 'busy'")
+    try:
+        assert len(m.recent_opencode_transcripts(project)) == 1
+        assert _context_for(monkeypatch, "opencode", project)["prs"]
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+def test_opencode_sees_rows_a_running_writer_left_in_the_wal(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, db_path = _opencode_home(monkeypatch, tmp_path)
+    writer = sqlite3.connect(str(db_path))
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("INSERT INTO session (id, project_id, slug, directory, title, version,"
+                   " time_created, time_updated) VALUES ('ses_newer', 'p', 's', ?, 't', 'v',"
+                   " 1790977999000, 1790977999000)", (str(project),))
+    writer.commit()
+    try:
+        assert (db_path.parent / "opencode.db-wal").stat().st_size > 0
+        assert [s.id for s in m.recent_opencode_transcripts(project, max_age_h=0)] == ["ses_newer"]
+    finally:
+        writer.close()
+
+
+def test_opencode_leaves_no_files_beside_an_idle_wal_database(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, db_path = _opencode_home(monkeypatch, tmp_path)
+    con = sqlite3.connect(str(db_path))
+    con.execute("PRAGMA journal_mode=WAL")
+    con.close()
+    assert sorted(p.name for p in db_path.parent.iterdir()) == ["opencode.db"]
+    assert len(m.recent_opencode_transcripts(project)) == 1
+    assert sorted(p.name for p in db_path.parent.iterdir()) == ["opencode.db"]
+
+
+def test_opencode_never_writes_to_the_database(monkeypatch, tmp_path):
+    project, db_path = _opencode_home(monkeypatch, tmp_path)
+    before = hashlib.sha256(db_path.read_bytes()).hexdigest()
+    _context_for(monkeypatch, "opencode", project)
+    assert hashlib.sha256(db_path.read_bytes()).hexdigest() == before
+    assert sorted(p.name for p in db_path.parent.iterdir()) == ["opencode.db"]
+
+
+def test_opencode_survives_a_database_that_is_not_one(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    data = tmp_path / "opencode"
+    data.mkdir()
+    (data / "opencode.db").write_text("not a database")
+    monkeypatch.setattr(m, "OPENCODE_DATA_DIR", data)
+    assert m.recent_opencode_transcripts(tmp_path) == []
+    assert m.load_events("opencode", m.OpencodeSession(data / "opencode.db", "x", 0.0)) == []
+
+
+def test_opencode_db_env_names_the_database(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, db_path = _opencode_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "OPENCODE_DATA_DIR", tmp_path / "elsewhere")
+    monkeypatch.setenv("OPENCODE_DB", str(db_path))
+    assert len(m.recent_opencode_transcripts(project)) == 1
+
+
+# Kimi Code
+
+def test_kimi_workdir_key_matches_kimi_code():
+    import devmachine_infer as m
+
+    assert m.kimi_workdir_key("/Users/alice/dev/widgets") == "wd_widgets_7b506ce63f89"
+    assert m.kimi_workdir_key("/Users/me/Developer/proj") == "wd_proj_76bfce3667dc"
+
+
+def test_recent_kimi_transcripts_reads_the_session_index(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, home = _kimi_home(monkeypatch, tmp_path)
+    found = m.recent_kimi_transcripts(project)
+    assert [f.name for f in found] == ["wire.jsonl"]
+    assert found[0].parent.parent.parent.name.startswith("session_3f6c1a52")
+    assert m.recent_kimi_transcripts(tmp_path / "gadgets") == []
+
+
+def test_recent_kimi_transcripts_drops_a_deleted_session(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, home = _kimi_home(monkeypatch, tmp_path)
+    with open(home / "session_index.jsonl", "a") as fh:
+        fh.write('{"sessionId":"session_3f6c1a52-8d1e-4b7a-9c2e-5a1b7d9e0f42","deleted":true}\n')
+    assert m.recent_kimi_transcripts(project) == []
+
+
+def test_recent_kimi_transcripts_falls_back_to_the_computed_folder(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, home = _kimi_home(monkeypatch, tmp_path)
+    (home / "session_index.jsonl").unlink()
+    (home / "sessions" / "wd_widgets_7b506ce63f89").rename(
+        home / "sessions" / m.kimi_workdir_key(str(project)))
+    assert [f.name for f in m.recent_kimi_transcripts(project)] == ["wire.jsonl"]
+
+
+def test_kimi_refs_read_text_tool_args_and_results(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _kimi_home(monkeypatch, tmp_path)
+    github = _refs("kimi", m.find_kimi_transcript(project))
+    assert "acme/widgets#42" in github
+    assert "acme/other#42" in github
+
+
+def test_kimi_todos_come_from_the_last_todo_store_update(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _kimi_home(monkeypatch, tmp_path)
+    events = m.load_events("kimi", m.find_kimi_transcript(project))
+    events.append({"type": "tools.update_store", "agentId": "main", "key": "todo", "time": 1,
+                   "value": [{"title": "Address review comments on PR 42", "status": "done"},
+                             {"title": "Re-run CI after fixes", "status": "in_progress"}]})
+    assert m.latest_todos(events, "kimi") == [
+        {"text": "Address review comments on PR 42", "state": "done"},
+        {"text": "Re-run CI after fixes", "state": "active"}]
+
+
+def test_kimi_subagent_runs_until_its_terminal_record():
+    import devmachine_infer as m
+
+    spawned = {"type": "subagent.spawned", "subagentId": "agent-0", "subagentName": "coder",
+               "description": "Fix the review comments", "time": 1790950001000}
+    assert m.extract_background([spawned], "kimi")["agents"] == [
+        {"label": "Fix the review comments", "status": "running"}]
+    done = {"type": "subagent.completed", "subagentId": "agent-0", "time": 1790950002000}
+    assert m.extract_background([spawned, done], "kimi")["agents"] == []
+
+
+def test_build_context_reports_kimi(monkeypatch, tmp_path):
+    project, _ = _kimi_home(monkeypatch, tmp_path)
+    ctx = _context_for(monkeypatch, "kimi", project)
+    assert set(ctx) == CONTEXT_KEYS
+    assert ctx["harness"] == "kimi" and ctx["isClaude"] is False
+    assert [(p["repo"], p["number"]) for p in ctx["prs"]] == [("acme/widgets", 42)]
+    assert [i["state"] for i in ctx["plan"]["items"]] == ["active", "pending"]
+    assert ctx["agents"] == []
+
+
+# Cline
+
+def test_recent_cline_transcripts_reads_the_session_index(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _cline_home(monkeypatch, tmp_path)
+    assert [f.name for f in m.recent_cline_transcripts(project)] == [
+        "1790863200000_k3x9q.messages.json"]
+    assert m.recent_cline_transcripts(tmp_path / "gadgets") == []
+
+
+def test_recent_cline_transcripts_reads_manifests_without_the_index(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _cline_home(monkeypatch, tmp_path, with_db=False)
+    assert [f.name for f in m.recent_cline_transcripts(project)] == [
+        "1790863200000_k3x9q.messages.json"]
+    assert m.recent_cline_transcripts(tmp_path / "gadgets") == []
+
+
+def test_cline_refs_read_text_tool_input_and_tool_result(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _cline_home(monkeypatch, tmp_path)
+    github = _refs("cline", m.find_cline_transcript(project))
+    assert "acme/widgets#42" in github
+    assert "acme/other#42" in github
+
+
+def test_cline_survives_a_half_written_messages_file(tmp_path):
+    import devmachine_infer as m
+
+    broken = tmp_path / "x.messages.json"
+    broken.write_text('{"version": 1, "messages": [')
+    assert m.load_events("cline", broken) == []
+
+
+def test_cline_reads_a_bare_message_array(tmp_path):
+    bare = tmp_path / "x.messages.json"
+    bare.write_text(json.dumps([{"role": "user", "ts": 1,
+                                 "content": "see https://github.com/acme/widgets/pull/7"}]))
+    assert "acme/widgets#7" in _refs("cline", bare)
+
+
+def test_cline_spawned_agent_runs_until_its_result():
+    import devmachine_infer as m
+
+    call = {"role": "assistant", "ts": 1, "content": [
+        {"type": "tool_use", "id": "t1", "name": "spawn_agent",
+         "input": {"systemPrompt": "You review code.", "task": "Review PR 42"}}]}
+    assert m.extract_background([call], "cline")["agents"] == [
+        {"label": "Review PR 42", "status": "running"}]
+    result = {"role": "user", "ts": 2, "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "done"}]}
+    assert m.extract_background([call, result], "cline")["agents"] == []
+
+
+def test_build_context_reports_cline(monkeypatch, tmp_path):
+    project, _ = _cline_home(monkeypatch, tmp_path)
+    ctx = _context_for(monkeypatch, "cline", project)
+    assert set(ctx) == CONTEXT_KEYS
+    assert ctx["harness"] == "cline" and ctx["isClaude"] is False
+    assert [(p["repo"], p["number"]) for p in ctx["prs"]] == [("acme/widgets", 42)]
+    assert ctx["plan"] is None
+    assert ctx["agents"] == []
+
+
+# Antigravity
+
+def test_recent_antigravity_transcripts_reads_the_history(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _antigravity_home(monkeypatch, tmp_path)
+    assert [f.name for f in m.recent_antigravity_transcripts(project)] == ["transcript_full.jsonl"]
+    assert m.recent_antigravity_transcripts(tmp_path / "gadgets") == []
+
+
+def test_recent_antigravity_transcripts_skips_a_damaged_history_line(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, root = _antigravity_home(monkeypatch, tmp_path)
+    history = root / "history.jsonl"
+    history.write_text("{not json\n[1]\n" + history.read_text())
+    assert len(m.recent_antigravity_transcripts(project)) == 1
+
+
+def test_antigravity_refs_read_steps_and_tool_calls(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    project, _ = _antigravity_home(monkeypatch, tmp_path)
+    github = _refs("antigravity", m.find_antigravity_transcript(project))
+    assert "acme/widgets#42" in github
+    assert "acme/other#42" in github
+
+
+def test_antigravity_user_text_keeps_only_the_request():
+    import devmachine_infer as m
+
+    step = {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+            "created_at": "2026-09-30T14:00:00Z",
+            "content": "<USER_REQUEST>\nlook at PR 7\n</USER_REQUEST>\n"
+                       "<ADDITIONAL_METADATA>\nhttps://example.com/meta\n</ADDITIONAL_METADATA>"}
+    assert list(m._antigravity_ref_blobs([step], [])) == [("2026-09-30T14:00:00Z", "look at PR 7")]
+
+
+def test_build_context_reports_antigravity(monkeypatch, tmp_path):
+    project, _ = _antigravity_home(monkeypatch, tmp_path)
+    ctx = _context_for(monkeypatch, "antigravity", project)
+    assert set(ctx) == CONTEXT_KEYS
+    assert ctx["harness"] == "antigravity" and ctx["isClaude"] is False
+    assert [(p["repo"], p["number"]) for p in ctx["prs"]] == [("acme/widgets", 42)]
+    assert ctx["plan"] is None
+    assert ctx["agents"] == []
+
+
+# Detection
+
+@pytest.mark.parametrize("args,harness", [
+    ("/home/acme/.local/bin/pi", "pi"),
+    ("agy", "antigravity"),
+    ("/home/acme/.local/bin/agy", "antigravity"),
+    ("/home/acme/.opencode/bin/opencode", "opencode"),
+    ("node /home/acme/.npm/lib/node_modules/opencode-ai/bin/opencode", "opencode"),
+    ("kimi-code", "kimi"),
+    ("/home/acme/.kimi-code/bin/kimi", "kimi"),
+    ("node /home/acme/.local/bin/cline", "cline"),
+    ("node --no-warnings /home/acme/.local/bin/cline", "cline"),
+    ("/home/acme/.local/lib/node_modules/cline/bin/.cline", "cline"),
+    ("/home/acme/.local/lib/node_modules/cline/bin/.cline --cline-hub-daemon --cwd /srv", "cline"),
+])
+def test_harness_in_names_each_harness(args, harness):
+    import devmachine_infer as m
+
+    assert m._harness_in(args) == harness
+
+
+@pytest.mark.parametrize("args", [
+    "vim /home/alice/cline-notes.txt",
+    "node /srv/apis/server.js",
+    "/usr/bin/pip install pi",
+    "less /home/alice/opencode",
+    "python3 /home/alice/kimi.py",
+    "node /home/alice/pipeline/run.js",
+    "/usr/bin/agyle",
+])
+def test_harness_in_ignores_a_name_inside_another_word(args):
+    import devmachine_infer as m
+
+    assert m._harness_in(args) is None
+
+
+@pytest.mark.parametrize("pane,harness", [
+    ("kimi-code", "kimi"),
+    ("agy", "antigravity"),
+    ("opencode", "opencode"),
+    ("pi", "pi"),
+])
+def test_pane_harness_reads_the_pane_command(monkeypatch, pane, harness):
+    import devmachine_infer as m
+
+    monkeypatch.setattr(m, "run", _fake_tmux(pane + "\t100", ""))
+    assert m.pane_harness("sess") == harness
+
+
+def test_pane_harness_finds_cline_as_the_node_pane_process(monkeypatch):
+    import devmachine_infer as m
+
+    table = ("  100     1 node /home/acme/.local/bin/cline\n"
+             "  200   100 /home/acme/.local/lib/node_modules/cline/bin/.cline\n")
+    monkeypatch.setattr(m, "run", _fake_tmux("node\t100", table))
+    assert m.pane_harness("sess") == "cline"
+
+
+def test_pane_harness_finds_cline_through_its_native_child(monkeypatch):
+    import devmachine_infer as m
+
+    table = ("  100     1 -zsh\n"
+             "  200   100 /home/acme/.local/lib/node_modules/cline/bin/.cline\n")
+    monkeypatch.setattr(m, "run", _fake_tmux("MainThread\t100", table))
+    assert m.pane_harness("sess") == "cline"
+
+
+def test_detect_harness_falls_back_over_every_harness(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    monkeypatch.setattr(m, "run", lambda cmd, **kw: (False, ""))
+    files = {}
+    for i, name in enumerate(("claude", "codex", "pi", "kimi", "cline", "antigravity")):
+        files[name] = tmp_path / f"{name}.jsonl"
+        files[name].write_text("{}\n")
+        os.utime(files[name], (100 + i, 100 + i))
+    monkeypatch.setattr(m, "find_transcript", lambda mode, project: files["claude"])
+    monkeypatch.setattr(m, "find_codex_transcript", lambda project: files["codex"])
+    monkeypatch.setattr(m, "find_pi_transcript", lambda project: files["pi"])
+    monkeypatch.setattr(m, "find_kimi_transcript", lambda project: files["kimi"])
+    monkeypatch.setattr(m, "find_cline_transcript", lambda project: files["cline"])
+    monkeypatch.setattr(m, "find_antigravity_transcript", lambda project: files["antigravity"])
+    monkeypatch.setattr(m, "find_opencode_transcript", lambda project: None)
+    assert m.detect_harness(None, tmp_path) == "antigravity"
+
+    session = m.OpencodeSession(tmp_path / "opencode.db", "ses_x", 500.0)
+    monkeypatch.setattr(m, "find_opencode_transcript", lambda project: session)
+    assert m.detect_harness(None, tmp_path) == "opencode"
+
+
+def test_detect_harness_finds_a_kimi_session_on_disk(monkeypatch, tmp_path):
+    import devmachine_infer as m
+
+    monkeypatch.setattr(m, "run", lambda cmd, **kw: (False, ""))
+    monkeypatch.setattr(m, "find_transcript", lambda mode, project: None)
+    monkeypatch.setattr(m, "find_codex_transcript", lambda project: None)
+    monkeypatch.setattr(m, "find_pi_transcript", lambda project: None)
+    project, _ = _kimi_home(monkeypatch, tmp_path)
+    assert m.detect_harness(None, project) == "kimi"

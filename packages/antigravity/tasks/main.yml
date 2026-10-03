@@ -1,0 +1,39 @@
+---
+- name: Load the package names for this family
+  ansible.builtin.include_vars: "{{ ansible_facts['os_family'] }}.yml"
+
+- name: Install what the installer downloads with
+  ansible.builtin.package:
+    name: "{{ devmachine_antigravity_packages }}"
+    state: present
+
+# A dry run on a machine where this account does not exist yet cannot become
+# it: Ansible has no user to hand its temporary files to, and fails saying so.
+- name: Look for the account
+  ansible.builtin.stat:
+    path: "{{ devmachine_antigravity_home }}"
+  register: devmachine_antigravity_account
+  check_mode: false
+
+# The installer stops by itself when ~/.local/bin/agy exists, and the CLI
+# updates itself from then on, so this runs once per account.
+- name: Install the Antigravity CLI
+  become: true
+  become_user: "{{ devmachine_workspace.user }}"
+  environment:
+    HOME: "{{ devmachine_antigravity_home }}"
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://antigravity.google/cli/install.sh | bash
+    creates: "{{ devmachine_antigravity_home }}/.local/bin/agy"
+  when: not ansible_check_mode or devmachine_antigravity_account.stat.exists
+
+# .zshenv is read by every zsh, interactive or not. The same line is written by
+# the dev package, and writing it twice costs nothing.
+- name: Put the account's own tools on the PATH
+  ansible.builtin.lineinfile:
+    path: "{{ devmachine_antigravity_home }}/.zshenv"
+    line: 'export PATH="$HOME/.local/bin:$PATH"'
+    create: true
+    owner: "{{ devmachine_workspace.user }}"
+    group: "{{ devmachine_workspace.user }}"
+    mode: "0644"
