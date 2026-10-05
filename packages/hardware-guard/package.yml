@@ -45,9 +45,8 @@ variables:
     default: true
   notify_url:
     summary: >-
-      Where alerts are POSTed as plain text, for example an ntfy topic
-      (https://ntfy.sh/<topic>). Anybody who knows an ntfy topic can read
-      it, so pick one nobody can guess. Empty logs only.
+      A webhook each alert is POSTed to, as JSON with the host, the kind of
+      event and the message. Empty logs only.
     default: ""
   heartbeat_hours:
     summary: >-

@@ -335,27 +335,18 @@ def summary(r: dict) -> str:
 
 # ── side effects ─────────────────────────────────────────────────────────
 
-PRIORITY = {"shutdown": "urgent", "alert": "high", "recovered": "default", "heartbeat": "low", "test": "default"}
-TAGS = {"shutdown": "rotating_light", "alert": "fire", "recovered": "white_check_mark", "heartbeat": "heartbeat", "test": "bell"}
-
-
 def notify(url: str, kind: str, message: str) -> bool:
-    """POST the message as plain text. ntfy reads the headers; any other
-    webhook that takes a text body works too."""
+    """POST one event as JSON: {"host", "kind", "message"}. Any webhook that
+    takes a JSON body can receive it."""
     host = socket.gethostname()
     print("%s: %s" % (kind, message), flush=True)
     if not url:
         return False
     request = urllib.request.Request(
         url,
-        data=message.encode(),
+        data=json.dumps({"host": host, "kind": kind, "message": message}).encode(),
         method="POST",
-        headers={
-            "Title": "%s: %s" % (host, kind),
-            "Priority": PRIORITY.get(kind, "default"),
-            "Tags": TAGS.get(kind, ""),
-            "User-Agent": "devmachine-hardware-guard/1.0",
-        },
+        headers={"Content-Type": "application/json", "User-Agent": "devmachine-hardware-guard/1.0"},
     )
     try:
         with urllib.request.urlopen(request, timeout=15):

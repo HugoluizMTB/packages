@@ -21,21 +21,20 @@ home.
 | `battery_shutdown_celsius` | `55` | The battery at or above this for `sustain_seconds` shuts the machine down. |
 | `sustain_seconds` | `120` | How long a shutdown limit has to hold, so one spike never powers a machine off. |
 | `shutdown` | `true` | Power off when a limit holds. `false` only alerts. |
-| `notify_url` | `""` | Where alerts are POSTed as plain text, for example `https://ntfy.sh/<topic>`. Empty logs only. |
+| `notify_url` | `""` | A webhook each alert is POSTed to, as JSON. Empty logs only. |
 | `heartbeat_hours` | `24` | Send a short status this often, so silence means the machine is off or unreachable. `0` turns it off. |
 | `repeat_minutes` | `30` | How long the same alert waits before it is sent again. |
 | `battery_charge_limit` | `0` | Keep the battery below this percentage, where the firmware exposes `charge_control_end_threshold`. `0` leaves it alone. |
 
 ## Credentials
 
-None. `notify_url` is a setting, but treat it like a password: anybody who
-knows an ntfy topic can read it and post to it.
+None. If your webhook URL carries a token, treat `notify_url` like a password.
 
 ## Add it
 
 ```bash
 devmachine packages add hardware-guard --machine home
-devmachine machines edit home --set hardware-guard.notify_url=https://ntfy.sh/<topic>
+devmachine machines edit home --set hardware-guard.notify_url=https://example.com/hooks/hardware
 devmachine sync --machine home
 ```
 
@@ -67,10 +66,9 @@ devmachine run --machine home --package hardware-guard -- notify-test
   That is the point: it does not come back up into the same heat.
 - The heartbeat is how you learn the machine itself died — a guard cannot
   report its own power cut.
-- The alert body is plain text and the headers are ntfy's (`Title`,
-  `Priority`, `Tags`), so any webhook that takes a text body works too.
+- Each alert is one JSON object, `{"host", "kind", "message"}`, where `kind`
+  is `alert`, `recovered`, `heartbeat`, `shutdown` or `test`.
 
 ## Learn more
 
 - [Packages](https://mydevmachine.sh/packages/)
-- [ntfy](https://ntfy.sh/)

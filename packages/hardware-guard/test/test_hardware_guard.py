@@ -264,3 +264,26 @@ def test_check_powers_off_while_tripped(tmp_path, monkeypatch):
     m.main(["check"])
     assert powered == [True, True]
     assert sent.count("shutdown") == 1
+
+
+def test_notify_posts_one_json_event(monkeypatch):
+    sent = []
+
+    class Done:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(request, timeout):
+        sent.append(request)
+        return Done()
+
+    monkeypatch.setattr(m.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(m.socket, "gethostname", lambda: "home")
+    assert m.notify("https://example.com/hook", "alert", "Hottest sensor at 81°C.") is True
+    body = json.loads(sent[0].data)
+    assert body == {"host": "home", "kind": "alert", "message": "Hottest sensor at 81°C."}
+    assert sent[0].get_header("Content-type") == "application/json"
+
+
+def test_notify_without_url_only_logs():
+    assert m.notify("", "alert", "x") is False
